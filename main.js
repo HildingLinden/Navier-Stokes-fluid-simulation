@@ -4,14 +4,11 @@ function main() {
 	let canvas = document.getElementById("canvas");
 	let context = canvas.getContext("2d");
 
-	let N = 40;
-	let SCALE = 10;
+	let N = 50;
+	let SCALE = 8;
 
 	// n, diffusion, viscosity, dt
-	let grid = new FluidGrid(N, 0.01, 0.01, 0.001);
-	grid.addDensity(20,20, 1000);
-	//grid.addVelocity(20,20, 1000, 0);
-	//console.log(grid.density[21+20*N]);
+	let grid = new FluidGrid(N, 0.0001, 0.01, 0.1);
 
 	function draw() {
 		context.clearRect(0, 0, canvas.width, canvas.height);
@@ -27,6 +24,11 @@ function main() {
 	}
 
 	window.requestAnimationFrame(draw);
+
+	canvas.addEventListener("mousemove", (event) => {
+		grid.addDensity(Math.floor(event.clientX/SCALE)-1, Math.floor(event.clientY/SCALE)-1, 10);
+		//grid.addVelocity(Math.floor(event.clientX/SCALE)-1, Math.floor(event.clientY/SCALE)-1, 10);
+	});
 	/*
 	let imageData = context.createImageData(400, 400);
 	let data = imageData.data;
