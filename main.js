@@ -8,7 +8,10 @@ function main() {
 	let SCALE = 8;
 
 	// n, diffusion, viscosity, dt
-	let grid = new FluidGrid(N, 0.0001, 0.01, 0.1);
+	let grid = new FluidGrid(N, 0.00001, 0.00001, 0.1);
+
+	let velX = 0;
+	let velY = 1;
 
 	function draw() {
 		context.clearRect(0, 0, canvas.width, canvas.height);
@@ -19,6 +22,8 @@ function main() {
 				context.fillRect(i*SCALE, j*SCALE, SCALE, SCALE);
 			}
 		}
+		grid.addVelocity(25,25,velX,velY);
+		grid.addDensity(25,25,2);
 		grid.stepForward();
 		window.requestAnimationFrame(draw);
 	}
@@ -26,9 +31,17 @@ function main() {
 	window.requestAnimationFrame(draw);
 
 	canvas.addEventListener("mousemove", (event) => {
-		grid.addDensity(Math.floor(event.clientX/SCALE)-1, Math.floor(event.clientY/SCALE)-1, 10);
-		//grid.addVelocity(Math.floor(event.clientX/SCALE)-1, Math.floor(event.clientY/SCALE)-1, 10);
+		//console.log((event.clientX-210)/(event.clientY-210));
+		let x = event.clientX - 210;
+		let y = event.clientY - 210;
+		let mag = Math.sqrt(x*x+y*y);
+		velX = x/mag;
+		velY = y/mag;
 	});
+
+	function scale(x, in_min, in_max, out_min, out_max) {
+		return(x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+	}
 	/*
 	let imageData = context.createImageData(400, 400);
 	let data = imageData.data;

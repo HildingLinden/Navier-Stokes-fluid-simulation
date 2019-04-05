@@ -42,8 +42,8 @@ class FluidGrid {
 		let vectorY0 = this.vectorY0;
 
 		// Diffuse the velocity
-		diffuse(1, vectorX, vectorX0, visc, dt, 4, N);
-		diffuse(2, vectorY, vectorY0, visc, dt, 4, N);
+		diffuse(1, vectorX0, vectorX, visc, dt, 4, N);
+		diffuse(2, vectorY0, vectorY, visc, dt, 4, N);
 
 		// Mirror at the edges
 		project(vectorX0, vectorY0, vectorX, vectorY, 4, N);
