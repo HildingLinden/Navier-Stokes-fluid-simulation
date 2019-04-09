@@ -8,7 +8,7 @@ function main() {
 	let SCALE = 8;
 
 	// n, diffusion, viscosity, dt
-	let grid = new FluidGrid(N, 0.00001, 0.00001, 0.1);
+	let grid = new FluidGrid(N, 0.00001, 0.00001, 0.05);
 
 	let velX = 0;
 	let velY = 1;
@@ -23,7 +23,7 @@ function main() {
 			}
 		}
 		grid.addVelocity(25,25,velX,velY);
-		grid.addDensity(25,25,2);
+		grid.addDensity(25,25,1);
 		grid.stepForward();
 		window.requestAnimationFrame(draw);
 	}
@@ -31,7 +31,6 @@ function main() {
 	window.requestAnimationFrame(draw);
 
 	canvas.addEventListener("mousemove", (event) => {
-		//console.log((event.clientX-210)/(event.clientY-210));
 		let x = event.clientX - 210;
 		let y = event.clientY - 210;
 		let mag = Math.sqrt(x*x+y*y);
