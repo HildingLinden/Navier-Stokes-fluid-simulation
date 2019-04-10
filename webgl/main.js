@@ -25,16 +25,20 @@ out vec4 color;
 uniform sampler2D u_texture;
 
 void main() {
-	// color = texelFetch(u_texture, ivec2(v_textureCoord), 0);
-	color =
-		(texelFetch(u_texture, ivec2(v_textureCoord) + ivec2( 0,-1), 0) +
-		 texelFetch(u_texture, ivec2(v_textureCoord) + ivec2( 1, 0), 0) +
-		 texelFetch(u_texture, ivec2(v_textureCoord) + ivec2( 0, 1), 0) +
-		 texelFetch(u_texture, ivec2(v_textureCoord) + ivec2(-1, 0), 0));
+	float diffuseRate = 0.5;
+
+	color = texelFetch(u_texture, ivec2(v_textureCoord), 0);
+	// vec4 newValue =
+	// 	(texelFetch(u_texture, ivec2(v_textureCoord), 0) + vec4(diffuseRate) *
+	// 	 	(texelFetch(u_texture, ivec2(v_textureCoord) + ivec2( 0,-1), 0)
+	// 	 	+texelFetch(u_texture, ivec2(v_textureCoord) + ivec2( 1, 0), 0)
+	// 	 	+texelFetch(u_texture, ivec2(v_textureCoord) + ivec2( 0, 1), 0)
+	// 	 	+texelFetch(u_texture, ivec2(v_textureCoord) + ivec2(-1, 0), 0)
+	// 	 	)
+	// 	) * vec4(1.0 / (1.0 + 4.0 * diffuseRate));
+	// color = vec4(newValue.rgb, 1.0);
 }
 `;
-
-let N = 10;
 
 function loadImage() {
 	let img = new Image();
@@ -46,6 +50,9 @@ function loadImage() {
 }
 
 function main(img) {
+
+	let N = 1000;
+
 	// Canvas and context setup
 	let canvas = document.getElementById("canvas");
 	let context = canvas.getContext("webgl2",
@@ -107,7 +114,7 @@ function main(img) {
 	// Initial data
 	let initialData = textureSetup(context);
 	let textureArr = new Uint8Array(N*N*4);
-	textureArr[(N*N/2+N/2)*4] = 255;
+	drawBox(400,400,100,100);
 	context.texImage2D(context.TEXTURE_2D, 0, context.RGBA, N, N, 0, context.RGBA, context.UNSIGNED_BYTE, textureArr);
 	// R32F, RED, FLOAT
 
@@ -131,29 +138,31 @@ function main(img) {
 
 	let textureUniformLocation = context.getUniformLocation(program, "u_texture");
 
-	draw();
+	// Use and bind all the correct things
+	context.useProgram(program);
+	context.bindVertexArray(vao);
+	context.activeTexture(context.TEXTURE0);
+	context.bindTexture(context.TEXTURE_2D, initialData);
+	context.uniform1i(textureUniformLocation, 0);
 
-	function draw() {
+	let count = 0;
+	// Draw to the first framebuffer with the initial data
+	//context.clear(context.COLOR_BUFFER_BIT | context.DEPTH_BUFFER_BIT);
+	context.bindFramebuffer(context.FRAMEBUFFER, framebuffers[0]);
+	context.viewport(0, 0, N, N);
+	context.drawArrays(context.TRIANGLES, 0, 6);
+
+	// Run with 30 fps
+	setInterval(() => drawLoop(), 1000);
+
+	function drawLoop() {
 		performance.mark("start");
-
-		// Use and bind all the correct things
-		context.useProgram(program);
-		context.bindVertexArray(vao);
-		context.activeTexture(context.TEXTURE0);
-		context.bindTexture(context.TEXTURE_2D, initialData);
-		context.uniform1i(textureUniformLocation, 0);
-
-		let count = 0;
-		// Draw to the first framebuffer with the initial data
-		//context.clear(context.COLOR_BUFFER_BIT | context.DEPTH_BUFFER_BIT);
-		context.bindFramebuffer(context.FRAMEBUFFER, framebuffers[0]);
-		context.viewport(0, 0, N, N);
-		context.drawArrays(context.TRIANGLES, 0, 6);
 
 		// Then alternate textures and framebuffers
 		// For all steps
 		context.bindTexture(context.TEXTURE_2D, textures[count % 2]);
 		context.bindFramebuffer(context.FRAMEBUFFER, framebuffers[++count % 2]);
+		context.viewport(0, 0, N, N);
 		context.drawArrays(context.TRIANGLES, 0, 6);
 		// End for
 
@@ -164,6 +173,8 @@ function main(img) {
 		context.drawArrays(context.TRIANGLES, 0, 6);
 
 		// Only accurate to 2ms (FF60) or 20µs (FF59 or if privacy.reduceTimerPrecision is false)
+		context.flush();
+		context.finish();
 		performance.measure("draw", "start");
 		console.log("Time for draw: " + performance.getEntriesByType("measure")[0]["duration"] + "ms");
 
@@ -177,9 +188,21 @@ function main(img) {
 		// });
 		// console.log(results);
 	}
+
+	function IX(x, y) {
+		return x + y * N;
+	}
+
+	function drawBox(x,y,width,height) {
+		for (let i = y; i < y+height; i++) {
+			for (let j = x; j < x+width; j++) {
+				textureArr[IX(j,i)*4+0] = 255;
+				textureArr[IX(j,i)*4+1] = 255;
+				textureArr[IX(j,i)*4+2] = 255;
+			}
+		}
+	}
 }
-
-
 
 function createShader(context, type, source) {
 	let shader = context.createShader(type);
