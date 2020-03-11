@@ -52,10 +52,10 @@ class FluidGrid {
 		advect(0, this.density, this.prevDensity, this.velocityX, this.velocityY, this.dt, this.size);
 
 		// Fade the dye
-		this.density = this.density.map(x => Math.max(x-this.fadeRate, 0));
+		this.density = this.density.map(x => x * (1-this.fadeRate));
 
 		let t1 = performance.now();
-		console.log("Step ", t1-t0);
+		//console.log("Step ", t1-t0);
 	}
 }
 
