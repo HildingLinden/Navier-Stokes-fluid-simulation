@@ -23,40 +23,37 @@ in vec2 v_textureCoord;
 out vec4 color;
 
 uniform sampler2D u_texture;
+uniform sampler2D u_additionalTexture;
 
 void main() {
 	float diffuseRate = 0.5;
 
-	color = texelFetch(u_texture, ivec2(v_textureCoord), 0);
-	// vec4 newValue =
-	// 	(texelFetch(u_texture, ivec2(v_textureCoord), 0) + vec4(diffuseRate) *
-	// 	 	(texelFetch(u_texture, ivec2(v_textureCoord) + ivec2( 0,-1), 0)
-	// 	 	+texelFetch(u_texture, ivec2(v_textureCoord) + ivec2( 1, 0), 0)
-	// 	 	+texelFetch(u_texture, ivec2(v_textureCoord) + ivec2( 0, 1), 0)
-	// 	 	+texelFetch(u_texture, ivec2(v_textureCoord) + ivec2(-1, 0), 0)
-	// 	 	)
-	// 	) * vec4(1.0 / (1.0 + 4.0 * diffuseRate));
-	// color = vec4(newValue.rgb, 1.0);
+	// color = texelFetch(u_texture, ivec2(v_textureCoord), 0);
+	vec4 newValue =
+		(texelFetch(u_texture, ivec2(v_textureCoord), 0) + vec4(diffuseRate) *
+		 	(texelFetch(u_texture, ivec2(v_textureCoord) + ivec2( 0,-1), 0)
+		 	+texelFetch(u_texture, ivec2(v_textureCoord) + ivec2( 1, 0), 0)
+		 	+texelFetch(u_texture, ivec2(v_textureCoord) + ivec2( 0, 1), 0)
+		 	+texelFetch(u_texture, ivec2(v_textureCoord) + ivec2(-1, 0), 0)
+		 	)
+		) * vec4(1.0 / (1.0 + 4.0 * diffuseRate));
+	color = vec4(newValue.rgb, 1.0) + texelFetch(u_additionalTexture, ivec2(v_textureCoord), 0);
 }
 `;
 
-function loadImage() {
-	let img = new Image();
-	img.addEventListener("load", () => {
-		console.log("Image loaded");
-		main(img);
-	}, false);
-	img.src = "test.png";
-}
-
 function main(img) {
 
-	let N = 1000;
+	let N = 100;
+	let loopId = 0;
 
 	// Canvas and context setup
 	let canvas = document.getElementById("canvas");
 	let context = canvas.getContext("webgl2",
 		{antialias: false, powerPreference: "high-performance"});
+
+	canvas.addEventListener("click", addDensity, false);
+
+	let scale = 500/N;
 
 	// Enable 32-bit floating-point values for the color buffer
 	context.getExtension("EXT_color_buffer_float");
@@ -111,12 +108,13 @@ function main(img) {
 	/*
 	 * Textures/Data
 	 */
-	// Initial data
-	let initialData = textureSetup(context);
-	let textureArr = new Uint8Array(N*N*4);
-	drawBox(400,400,100,100);
-	context.texImage2D(context.TEXTURE_2D, 0, context.RGBA, N, N, 0, context.RGBA, context.UNSIGNED_BYTE, textureArr);
 	// R32F, RED, FLOAT
+	let newTexture = textureSetup(context);
+
+	// Empty texture
+	let emptyTexture = textureSetup(context);
+	let emptyTextureArr = new Uint8Array(N*N*4);
+	context.texImage2D(context.TEXTURE_2D, 0, context.RGBA, N, N, 0, context.RGBA, context.UNSIGNED_BYTE, emptyTextureArr);
 
 	let textures = [];
 	let framebuffers = [];
@@ -137,36 +135,49 @@ function main(img) {
 	}
 
 	let textureUniformLocation = context.getUniformLocation(program, "u_texture");
+	let additionalTextureUniformLocation = context.getUniformLocation(program, "u_additionalTexture");
 
-	// Use and bind all the correct things
+	// Use program and bind vao
 	context.useProgram(program);
 	context.bindVertexArray(vao);
+
+	// Bind both initial textures
 	context.activeTexture(context.TEXTURE0);
-	context.bindTexture(context.TEXTURE_2D, initialData);
+	context.bindTexture(context.TEXTURE_2D, textures[1]);
+	context.activeTexture(context.TEXTURE1);
+	context.bindTexture(context.TEXTURE_2D, emptyTexture);
+
+	// Set texture uniform
 	context.uniform1i(textureUniformLocation, 0);
+	context.uniform1i(additionalTextureUniformLocation, 1);
 
 	let count = 0;
-	// Draw to the first framebuffer with the initial data
+	// Start by rendering with initialData to texture0 and then with that texture to canvas
+	// Which essentially means that we skip drawing the initial state
 	//context.clear(context.COLOR_BUFFER_BIT | context.DEPTH_BUFFER_BIT);
 	context.bindFramebuffer(context.FRAMEBUFFER, framebuffers[0]);
 	context.viewport(0, 0, N, N);
+	context.activeTexture(context.TEXTURE0);
 	context.drawArrays(context.TRIANGLES, 0, 6);
 
-	// Run with 30 fps
-	setInterval(() => drawLoop(), 1000);
+	context.bindTexture(context.TEXTURE_2D, textures[count % 2]);
+	context.bindFramebuffer(context.FRAMEBUFFER, null);
+	context.viewport(0, 0, context.canvas.width, context.canvas.height);
+	context.drawArrays(context.TRIANGLES, 0, 6);
+
+	loopId = setInterval(() => drawLoop(), 33);
 
 	function drawLoop() {
 		performance.mark("start");
 
-		// Then alternate textures and framebuffers
-		// For all steps
-		context.bindTexture(context.TEXTURE_2D, textures[count % 2]);
-		context.bindFramebuffer(context.FRAMEBUFFER, framebuffers[++count % 2]);
-		context.viewport(0, 0, N, N);
-		context.drawArrays(context.TRIANGLES, 0, 6);
-		// End for
+		context.activeTexture(context.TEXTURE0);
 
-		// Finally draw to canvas
+		// Render from previous texture to current texture
+		context.bindFramebuffer(context.FRAMEBUFFER, framebuffers[++count % 2]);
+		context.viewport(-1, -1, context.canvas.width, context.canvas.width);
+		context.drawArrays(context.TRIANGLES, 0, 6);
+
+		// Render from current texture to canvas
 		context.bindTexture(context.TEXTURE_2D, textures[count % 2]);
 		context.bindFramebuffer(context.FRAMEBUFFER, null);
 		context.viewport(0, 0, context.canvas.width, context.canvas.height);
@@ -193,14 +204,32 @@ function main(img) {
 		return x + y * N;
 	}
 
-	function drawBox(x,y,width,height) {
+	function drawBox(arr, x, y, width, height) {
 		for (let i = y; i < y+height; i++) {
 			for (let j = x; j < x+width; j++) {
-				textureArr[IX(j,i)*4+0] = 255;
-				textureArr[IX(j,i)*4+1] = 255;
-				textureArr[IX(j,i)*4+2] = 255;
+				arr[IX(j,i)*4+0] = 255;
+				arr[IX(j,i)*4+1] = 255;
+				arr[IX(j,i)*4+2] = 255;
 			}
 		}
+	}
+
+	function addDensity(event) {
+		// Stop loop
+		clearInterval(loopId);
+
+		let newTextureArr = new Uint8Array(N*N*4);
+		drawBox(newTextureArr, Math.round(event.clientX/scale)-2, Math.round(Math.abs(event.clientY/scale-100))+2, 2, 2);
+		context.texImage2D(context.TEXTURE_2D, 0, context.RGBA, N, N, 0, context.RGBA, context.UNSIGNED_BYTE, newTextureArr);
+
+		context.activeTexture(context.TEXTURE1);
+		context.bindTexture(context.TEXTURE_2D, newTexture);
+		drawLoop();
+
+		// Continue loop with empty texture
+		context.activeTexture(context.TEXTURE1);
+		context.bindTexture(context.TEXTURE_2D, emptyTexture);
+		loopId = setInterval(() => drawLoop(), 33);
 	}
 }
 
