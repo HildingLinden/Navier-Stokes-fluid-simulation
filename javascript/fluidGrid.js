@@ -96,6 +96,7 @@ function project(velocityX, velocityY, p, div, iterations, size) {
 	}
 
 	set_bounds(0, div, size);
+	set_bounds(0, p, size);
 
 	// Gauss-Seidel relaxation
 	// Conjugate gradient solver might improve quality
