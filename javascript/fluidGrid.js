@@ -55,7 +55,7 @@ class FluidGrid {
 		this.density = this.density.map(x => x * (1-this.fadeRate));
 
 		let t1 = performance.now();
-		//console.log("Step ", t1-t0);
+		return t1-t0;
 	}
 }
 
