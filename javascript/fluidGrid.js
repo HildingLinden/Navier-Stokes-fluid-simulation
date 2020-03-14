@@ -67,12 +67,12 @@ function diffuse(direction, arr, prevArr, diffusionRate, dt, iterations, size) {
 		for (let y = 1; y < size - 1; y++) {
 			for (let x = 1; x < size - 1; x++) {
 
-				let up 	  =	arr[x		+ (y-1) * size];
-				let down  =	arr[x 		+ (y+1) * size];
-				let left  =	arr[(x-1)	+ y 	* size];
-				let right = arr[(x+1)	+ y 	* size];
-
-				arr[x+y*size] = (prevArr[x+y*size] + diffusion * (up + down + left + right)) / (1 + 4 * diffusion);
+				arr[x+y*size] = (prevArr[x+y*size] + diffusion * (
+					arr[x		+ (y-1) * size] + // Up
+					arr[x 		+ (y+1) * size] + // Down
+					arr[(x-1)	+ y 	* size] + // Left
+					arr[(x+1)	+ y 	* size]   // Right
+				)) / (1 + 4 * diffusion);
 			}
 		}
 		// Set the edges of the whole fluid
@@ -103,12 +103,14 @@ function project(velocityX, velocityY, p, div, iterations, size) {
 	for (let iteration = 0; iteration < iterations; iteration++) {
 		for (let y = 1; y < size-1; y++) {
 			for (let x = 1; x < size-1; x++) {
-				let up 	  =	p[x		+ (y-1) * size];
-				let down  =	p[x 		+ (y+1) * size];
-				let left  =	p[(x-1)	+ y 	* size];
-				let right = p[(x+1)	+ y 	* size];
 
-				p[x+y*size] = (div[x+y*size] + up + down + left + right) / 4;
+				p[x+y*size] = (
+					div[x+y*size]  			+
+					p[x		+ (y-1) * size] + // Up
+					p[x 	+ (y+1) * size] + // Down
+					p[(x-1)	+ y 	* size] + // Left
+					p[(x+1)	+ y 	* size]   // Right
+				) / 4;
 			}
 		}
 		set_bounds(0, p, size);
