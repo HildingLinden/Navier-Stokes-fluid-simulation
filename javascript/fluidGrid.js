@@ -51,7 +51,7 @@ class FluidGrid {
 		advect(0, this.density, this.prevDensity, this.velocityX, this.velocityY, dt, this.size);
 
 		// Fade the dye
-		this.density = this.density.map(x => x * (1-this.fadeRate));
+		//this.density = this.density.map(x => x * (1-this.fadeRate));
 
 		let t1 = performance.now();
 		return t1-t0;
@@ -132,15 +132,15 @@ function project(velocityX, velocityY, p, div, iterations, size) {
 function advect(direction, arr, prevArr, velocityX, velocityY, dt, size) {
 	let dt0 = dt * size;
 
-	for (let y = 1; y < size - 1; y++) {
-		for (let x = 1; x < size - 1; x++) {
+	for (let y = 0; y < size; y++) {
+		for (let x = 0; x < size; x++) {
 			// Get the previous x and y location of current cell
 			let prevX = x - dt0 * velocityX[x+y*size];
 			let prevY = y - dt0 * velocityY[x+y*size];
 
 			// Clamp to 0.5 from edges
-			prevX = Math.min(Math.max(0.5, prevX), size-1+0.5);
-			prevY = Math.min(Math.max(0.5, prevY), size-1+0.5);
+			prevX = Math.min(Math.max(0.5, prevX), size-1.5);
+			prevY = Math.min(Math.max(0.5, prevY), size-1.5);
 
 			let prevXInt = Math.floor(prevX);
 			let prevYInt = Math.floor(prevY);
