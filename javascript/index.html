@@ -54,11 +54,18 @@
 				<input type="range" id="velocitySlider" min="1" max="1500">
 				<output for="velocitySlider" id="velocityOutput">0</output>
 				</li>
+
+				<li>
+				<label for="timeScaleSlider">Time scale</label>
+				<input type="range" id="timeScaleSlider" min="0.1" max="2.0" step="0.1">
+				<output for="timeScaleSlider" id="timeScaleOutput">0</output>
+				</li>
 			</div>
 
 			<div id="performance">
-				<p id="stepTime"></p>
+				<p id="physicsTime"></p>
 				<p id="drawTime"></p>
+				<p id="timeStep"></p>
 			</div>
 			<div id="link">
 				<a href="https://github.com/HildingLinden/Navier-Stokes-fluid-simulation">Back to repository</a>

@@ -5,8 +5,9 @@ function main() {
 	let context = canvas.getContext("2d");
 	context.imageSmoothingEnabled = false;
 
-	let stepTimeText = document.getElementById("stepTime");
+	let physicsTimeText = document.getElementById("physicsTime");
 	let drawTimeText = document.getElementById("drawTime");
+	let timeStepText = document.getElementById("timeStep");
 
 	let resolution = 100;
 	let SCALE = canvas.width/resolution;
@@ -17,6 +18,7 @@ function main() {
 	let iterations = 4;
 	let density = 200;
 	let velocity = 500;
+	let timeScale = 1.0;
 
 	let grid = new FluidGrid(resolution, diffusion, viscosity, fadeRate, iterations);
 
@@ -31,9 +33,15 @@ function main() {
 		}
 	}
 
-	let dt = 0;
+	let timeStep0 = performance.now()
 
 	function loop() {
+		let timeStep1 = performance.now();
+		let dt = (timeStep1 - timeStep0) / (1000 / timeScale);
+		timeStep0 = timeStep1;
+
+		timeStepText.innerHTML = "Time between frames " + (dt*(1000 / timeScale)).toFixed(3) + "ms";
+
 		// Add velocity to the middle of the canvas in the direction of the mouse
 		grid.addVelocity(resolution/2, resolution/2, velX, velY, dt);
 
@@ -43,7 +51,7 @@ function main() {
 		// Step the physics forward a time step
 		let stepTime = grid.step(dt);
 
-		stepTimeText.innerHTML = "Physics step time " + stepTime.toFixed(3) + "ms";
+		physicsTimeText.innerHTML = "Physics time " + stepTime.toFixed(3) + "ms";
 
 		let t0 = performance.now();
 
@@ -67,8 +75,6 @@ function main() {
 		let t1 = performance.now();
 		let drawTime = t1-t0;
 		drawTimeText.innerHTML = "Draw time " + drawTime.toFixed(3) + "ms";
-
-		dt = (stepTime + drawTime) / 1000;
 
 		window.requestAnimationFrame(loop);
 	}
@@ -192,6 +198,17 @@ function main() {
 	});
 	resolutionSlider.addEventListener("input", (event) => {
 		resolutionOutput.value = event.target.value;
+	});
+
+	let timeScaleOutput = document.getElementById("timeScaleOutput");
+	let timeScaleSlider = document.getElementById("timeScaleSlider");
+	timeScaleOutput.value = timeScale;
+	timeScaleSlider.value = timeScale;
+	timeScaleSlider.addEventListener("change", (event) => {
+		timeScale = event.target.value;
+	});
+	timeScaleSlider.addEventListener("input", (event) => {
+		timeScaleOutput.value = event.target.value;
 	});
 
 
