@@ -5,14 +5,64 @@
 		<meta charset="utf-8">
 		<script type="text/javascript" src="fluidGrid.js"></script>
 		<script type="text/javascript" src="main.js"></script>
+		<link rel="stylesheet" type="text/css" href="style.css">
 	</head>
 
 	<body onload="main()">
-		<canvas width="800px" height="800px" style="background-color: black" id="canvas"></canvas>
-		<p id="stepTime"></p>
-		<p id="drawTime"></p>
+		<div id="container">
+			<canvas width="800px" height="800px" style="background-color: black" id="canvas"></canvas>
+
+			<div id="sliders">
+				<li>
+				<label for="resolutionSlider">Resolution</label>
+				<input type="range" id="resolutionSlider" min="10" max="500" step="10">
+				<output for="resolutionSlider" id="resolutionOutput">0</output>
+				</li>
+
+				<li>
+				<label for="diffusionSlider">Diffusion</label>
+				<input type="range" id="diffusionSlider">
+				<output for="diffusionSlider" id="diffusionOutput">0</output>
+				</li>
+
+				<li>
+				<label for="viscositySlider">Viscosity</label>
+				<input type="range" id="viscositySlider">
+				<output for="viscositySlider" id="viscosityOutput">0</output>
+				</li>
+
+				<li>
+				<label for="fadeRateSlider">Fade rate</label>
+				<input type="range" id="fadeRateSlider">
+				<output for="fadeRateSlider" id="fadeRateOutput">0</output>
+				</li>
+
+				<li>
+				<label for="iterationsSlider">Iterations</label>
+				<input type="range" id="iterationsSlider" min="1" max="100">
+				<output for="iterationsSlider" id="iterationsOutput">0</output>
+				</li>
+
+				<li>
+				<label for="densitySlider">Dye density</label>
+				<input type="range" id="densitySlider" min="0" max="1000">
+				<output for="densitySlider" id="densityOutput">0</output>
+				</li>
+
+				<li>
+				<label for="velocitySlider">Dye velocity</label>
+				<input type="range" id="velocitySlider" min="1" max="1500">
+				<output for="velocitySlider" id="velocityOutput">0</output>
+				</li>
+			</div>
+
+			<div id="performance">
+				<p id="stepTime"></p>
+				<p id="drawTime"></p>
+			</div>
+			<div id="link">
+				<a href="https://github.com/HildingLinden/Navier-Stokes-fluid-simulation">Back to repository</a>
+			</div>
+		</div>
 	</body>
-	<br>
-	<br>
-	<a href="https://github.com/HildingLinden/Navier-Stokes-fluid-simulation">To repository</a>
 </html>
