@@ -61,6 +61,9 @@ class FluidGrid {
 function diffuse(direction, arr, prevArr, diffusionRate, dt, iterations, size) {
 	let diffusion = dt * diffusionRate * size * size;
 
+	// 1 + dimensions * 2 * diffusion
+	let diffusionReciprocal = 1 / (1 + 4 * diffusion);
+
 	// Guass-Seidel relaxation
 	for (let iteration = 0; iteration < iterations; iteration++) {
 		for (let y = 1; y < size - 1; y++) {
@@ -71,7 +74,7 @@ function diffuse(direction, arr, prevArr, diffusionRate, dt, iterations, size) {
 					arr[x 		+ (y+1) * size] + // Down
 					arr[(x-1)	+ y 	* size] + // Left
 					arr[(x+1)	+ y 	* size]   // Right
-				)) / (1 + 4 * diffusion);
+				)) * diffusionReciprocal;
 			}
 		}
 		// Set the edges of the whole fluid
@@ -82,14 +85,14 @@ function diffuse(direction, arr, prevArr, diffusionRate, dt, iterations, size) {
 function project(velocityX, velocityY, p, div, iterations, size) {
 	// Hodge decomposition, poisson equation
 
-	let h = 1/size;
+	let sizeReciprocal = 1/size;
 
 	for (let y = 1; y < size-1; y++) {
 		for (let x = 1; x < size-1; x++) {
-			div[x+y*size] = -0.5*h*(
+			div[x+y*size] = -0.5*(
 				velocityX[(x+1) + y 	* size] - velocityX[(x-1) + y 	  * size] +
 				velocityY[x     + (y+1) * size] - velocityY[x 	  + (y-1) * size]
-			);
+			) * sizeReciprocal;
 			p[x+y*size] = 0;
 		}
 	}
@@ -109,7 +112,7 @@ function project(velocityX, velocityY, p, div, iterations, size) {
 					p[x 	+ (y+1) * size] + // Down
 					p[(x-1)	+ y 	* size] + // Left
 					p[(x+1)	+ y 	* size]   // Right
-				) / 4;
+				) / 4;	// Dimensions times 2, reciprocal multiplication does not increase performance
 			}
 		}
 		set_bounds(0, p, size);
@@ -117,8 +120,8 @@ function project(velocityX, velocityY, p, div, iterations, size) {
 
 	for (let y = 1; y < size-1; y++) {
 		for (let x = 1; x < size-1; x++) {
-			velocityX[x+y*size] -= 0.5*(p[(x+1) + y 	* size] - p[(x-1) + y 	  * size])/h;
-			velocityY[x+y*size] -= 0.5*(p[x     + (y+1) * size] - p[x 	  + (y-1) * size])/h;
+			velocityX[x+y*size] -= 0.5*(p[(x+1) + y 	* size] - p[(x-1) + y 	  * size])*size;
+			velocityY[x+y*size] -= 0.5*(p[x     + (y+1) * size] - p[x 	  + (y-1) * size])*size;
 		}
 	}
 
