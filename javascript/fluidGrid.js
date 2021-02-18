@@ -1,8 +1,7 @@
 "use strict";
 
 class FluidGrid {
-	constructor(size, diffusion, viscosity, fade, dt, iterations) {
-		this.dt = dt;
+	constructor(size, diffusion, viscosity, fade, iterations) {
 		this.iterations = iterations;
 
 		this.size = size;
@@ -20,36 +19,36 @@ class FluidGrid {
 	}
 
 	// Add density (dye) to a cell
-	addDensity(x, y, amount) {
-		this.density[x + y * this.size] += amount;
+	addDensity(x, y, amount, dt) {
+		this.density[x + y * this.size] += amount * dt;
 	}
 
 	// Add velocity (in x & y direction) to a cell
-	addVelocity(x, y, amountX, amountY) {
-		this.velocityX[x+y*this.size] += amountX;
-		this.velocityY[x+y*this.size] += amountY;
+	addVelocity(x, y, amountX, amountY, dt) {
+		this.velocityX[x+y*this.size] += amountX * dt;
+		this.velocityY[x+y*this.size] += amountY * dt;
 	}
 
-	step() {
+	step(dt) {
 		let t0 = performance.now();
 
 		// Diffuse the velocities of the fluid (viscous diffusion)
-		diffuse(1, this.prevVelocityX, this.velocityX, this.viscosity, this.dt, this.iterations, this.size);
-		diffuse(2, this.prevVelocityY, this.velocityY, this.viscosity, this.dt, this.iterations, this.size);
+		diffuse(1, this.prevVelocityX, this.velocityX, this.viscosity, dt, this.iterations, this.size);
+		diffuse(2, this.prevVelocityY, this.velocityY, this.viscosity, dt, this.iterations, this.size);
 
 		// Equalize cells
 		project(this.prevVelocityX, this.prevVelocityY, this.velocityX, this.velocityY, this.iterations, this.size);
 
 		// Move the velocity of the fluid (self-advection), swapping order of arr and prev array
-		advect(1, this.velocityX, this.prevVelocityX, this.prevVelocityX, this.prevVelocityY, this.dt, this.size);
-		advect(2, this.velocityY, this.prevVelocityY, this.prevVelocityX, this.prevVelocityY, this.dt, this.size);
+		advect(1, this.velocityX, this.prevVelocityX, this.prevVelocityX, this.prevVelocityY, dt, this.size);
+		advect(2, this.velocityY, this.prevVelocityY, this.prevVelocityX, this.prevVelocityY, dt, this.size);
 
 		// Equalize cells
 		project(this.velocityX, this.velocityY, this.prevVelocityX, this.prevVelocityY, this.iterations, this.size);
 
 		// Diffuse and move the density (dye), swapping order of arr and prev array
-		diffuse(0, this.prevDensity, this.density, this.diffusionRate, this.dt, this.iterations, this.size);
-		advect(0, this.density, this.prevDensity, this.velocityX, this.velocityY, this.dt, this.size);
+		diffuse(0, this.prevDensity, this.density, this.diffusionRate, dt, this.iterations, this.size);
+		advect(0, this.density, this.prevDensity, this.velocityX, this.velocityY, dt, this.size);
 
 		// Fade the dye
 		this.density = this.density.map(x => x * (1-this.fadeRate));
