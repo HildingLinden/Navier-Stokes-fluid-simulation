@@ -20,13 +20,13 @@ class FluidGrid {
 
 	// Add density (dye) to a cell
 	addDensity(x, y, amount, dt) {
-		this.density[x + y * this.size] += amount * dt;
+		this.density[x + y * this.size] += amount * dt * this.size;
 	}
 
 	// Add velocity (in x & y direction) to a cell
 	addVelocity(x, y, amountX, amountY, dt) {
-		this.velocityX[x+y*this.size] += amountX * dt;
-		this.velocityY[x+y*this.size] += amountY * dt;
+		this.velocityX[x+y*this.size] += amountX * dt * this.size;
+		this.velocityY[x+y*this.size] += amountY * dt * this.size;
 	}
 
 	step(dt) {
@@ -51,7 +51,7 @@ class FluidGrid {
 		advect(0, this.density, this.prevDensity, this.velocityX, this.velocityY, dt, this.size);
 
 		// Fade the dye
-		this.density = this.density.map(x => x * (1-this.fadeRate*dt*1000));
+		this.density = this.density.map(x => x * (1-this.fadeRate*dt*this.size));
 
 		let t1 = performance.now();
 		return t1-t0;
@@ -132,8 +132,8 @@ function project(velocityX, velocityY, p, div, iterations, size) {
 function advect(direction, arr, prevArr, velocityX, velocityY, dt, size) {
 	let dt0 = dt * size;
 
-	for (let y = 0; y < size; y++) {
-		for (let x = 0; x < size; x++) {
+	for (let y = 1; y < size-1; y++) {
+		for (let x = 1; x < size-1; x++) {
 			// Get the previous x and y location of current cell
 			let prevX = x - dt0 * velocityX[x+y*size];
 			let prevY = y - dt0 * velocityY[x+y*size];
@@ -161,7 +161,7 @@ function advect(direction, arr, prevArr, velocityX, velocityY, dt, size) {
 }
 
 function set_bounds(direction, arr, size) {
-	for (let i = 1; i < size; i++) {
+	for (let i = 1; i < size-1; i++) {
 		// Left and right edge get the reverse velocity of the neighbor if in X direction
 		arr[0		 + i * size] = direction == 1 ? -arr[1 	  	  + i * size] : arr[1		 + i * size];
 		arr[(size-1) + i * size] = direction == 1 ? -arr[(size-2) + i * size] : arr[(size-2) + i * size];

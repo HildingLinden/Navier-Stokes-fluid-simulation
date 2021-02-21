@@ -16,14 +16,14 @@ function main() {
 	let viscosity = 0.00001;
 	let fadeRate = 0.001;
 	let iterations = 4;
-	let density = 200;
-	let velocity = 500;
+	let density = 1;
+	let velocity = 5;
 	let timeScale = 1.0;
 
 	let grid = new FluidGrid(resolution, diffusion, viscosity, fadeRate, iterations);
 
 	let velX = 0;
-	let velY = 0;
+	let velY = -100;
 
 	// Create inital frame and set alpha to 255
 	let frame = context.createImageData(resolution, resolution);
