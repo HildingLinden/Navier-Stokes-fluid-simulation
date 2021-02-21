@@ -51,7 +51,7 @@ void FluidGrid::step(float dt, int iterations, float diffusionRate, float viscos
 	advect(Direction::VERTICAL, this->velocityY, this->prevVelocityY, this->prevVelocityX, this->prevVelocityY, dt);
 
 	// Conserve mass of the velocity field
-	project(10, this->velocityX, this->velocityY, this->prevVelocityX, this->prevVelocityY);
+	project(iterations, this->velocityX, this->velocityY, this->prevVelocityX, this->prevVelocityY);
 
 	// Diffuse density
 	std::swap(this->density, this->prevDensity);
@@ -106,26 +106,91 @@ void FluidGrid::advect(Direction direction, float *arr, float *prevArr, float *v
 void FluidGrid::project(int iterations, float *velocityX, float *velocityY, float *p, float *div) {
 	float sizeReciprocal = 1.0f / this->size;
 
+	__m256 _sizeReciprocal = _mm256_set1_ps(sizeReciprocal);
+	__m256 _minusHalf = _mm256_set1_ps(-0.5f);
+	__m256 _zero = _mm256_setzero_ps();
+
 	// Compute height field (Poisson-pressure equation)
 	for (int y = 1; y < this->size - 1; y++) {
-		for (int x = 1; x < this->size - 1; x++) {
+		int x = 1;
+
+		for ( ; x < this->size - 1; x+=8) {
+			/*
+			x = x[left] - x[right]
+			y = y[up] - y[down]
+			cell = x + y
+			cell *= -0.5
+			cell *= sizeReciprocal
+			div = cell
+			*/
+			__m256 _up = _mm256_loadu_ps(&velocityY[x + (y - 1) * this->size]);
+			__m256 _down = _mm256_loadu_ps(&velocityY[x + (y + 1) * this->size]);
+			__m256 _left = _mm256_loadu_ps(&velocityX[(x - 1) + y * this->size]);
+			__m256 _right = _mm256_loadu_ps(&velocityX[(x + 1) + y * this->size]);
+
+			__m256 _x = _mm256_sub_ps(_left, _right);
+			__m256 _y = _mm256_sub_ps(_up, _down);
+			__m256 _cell = _mm256_add_ps(_x, _y);
+			_cell = _mm256_mul_ps(_cell, _minusHalf);
+			_cell = _mm256_mul_ps(_cell, _sizeReciprocal);
+			_mm256_storeu_ps(&div[x + y * size], _cell);
+			_mm256_storeu_ps(&p[x + y * size], _zero);
+		}
+
+		// Take care of rest of the cells if x-2 is not evenly divisible by 8
+		for (; x < this->size - 1; x++) {
 			div[x + y * size] =
 				-0.5f * (
-					velocityX[(x-1) + y		* this->size] - velocityX[(x+1) + y		* this->size] +
-					velocityY[x		+ (y-1) * this->size] - velocityY[x		+ (y+1) * this->size]
-				) * sizeReciprocal;
+					velocityX[(x - 1) + y * this->size] - velocityX[(x + 1) + y * this->size] +
+					velocityY[x + (y - 1) * this->size] - velocityY[x + (y + 1) * this->size]
+					) * sizeReciprocal;
 			p[x + y * size] = 0;
 		}
 	}
+
 	setBounds(Direction::NONE, div);
 	setBounds(Direction::NONE, p);
 	linearSolve(Direction::NONE, iterations, p, div, 1, 4);
 
 	// Compute mass conserving field (Velocity field - Height field)
+	__m256 _size = _mm256_set1_ps(this->size);
+
 	for (int y = 1; y < this->size - 1; y++) {
-		for (int x = 1; x < this->size - 1; x++) {
-			velocityX[x + y * this->size] -= 0.5f * (p[(x-1) + y		* this->size] - p[(x+1) + y		* this->size]) * this->size;
-			velocityY[x + y * this->size] -= 0.5f * (p[x		+ (y-1) * this->size] - p[x		+ (y+1) * this->size]) * this->size;
+		int x = 1;
+
+		for ( ; x < this->size - 1; x+=8) {
+			__m256 _val, _oldVal;
+			/*
+			val = p[left] - p[right];
+			val *= size;
+			oldVal += -0.5f * val;
+			*/
+			__m256 _left  = _mm256_loadu_ps(&p[(x - 1) + y * this->size]);
+			__m256 _right = _mm256_loadu_ps(&p[(x + 1) + y * this->size]);			
+			_val = _mm256_sub_ps(_left, _right);
+			_val = _mm256_mul_ps(_val, _size);
+			_oldVal = _mm256_loadu_ps(&velocityX[x + y * this->size]);
+			_oldVal = _mm256_fmadd_ps(_val, _minusHalf, _oldVal);
+			_mm256_storeu_ps(&velocityX[x + y * this->size], _oldVal);
+
+			/*
+			val = p[up] - p[down];
+			val *= size;
+			oldVal += -0.5f * val;
+			*/
+			__m256 _up = _mm256_loadu_ps(&p[x + (y - 1) * this->size]);
+			__m256 _down = _mm256_loadu_ps(&p[x + (y + 1) * this->size]);
+			_val = _mm256_sub_ps(_up, _down);
+			_val = _mm256_mul_ps(_val, _size);
+			_oldVal = _mm256_loadu_ps(&velocityY[x + y * this->size]);
+			_oldVal = _mm256_fmadd_ps(_val, _minusHalf, _oldVal);
+			_mm256_storeu_ps(&velocityY[x + y * this->size], _oldVal);
+		}
+
+		// Take care of rest of the cells if x-2 is not evenly divisible by 8
+		for (; x < this->size - 1; x++) {
+			velocityX[x + y * this->size] -= 0.5f * (p[(x - 1) + y * this->size] - p[(x + 1) + y * this->size]) * this->size;
+			velocityY[x + y * this->size] -= 0.5f * (p[x + (y - 1) * this->size] - p[x + (y + 1) * this->size]) * this->size;
 		}
 	}
 
@@ -150,23 +215,26 @@ void FluidGrid::linearSolve(Direction direction, int iterations, float *arr, flo
 	for (int iteration = 0; iteration < iterations; iteration++) {
 		for (int y = 1; y < this->size - 1; y++) {
 			int x = 1;
+
 			for ( ; x < this->size - 1; x+= 8) {
-				// Add up, left, right & down together and then multiply with neighborDiffusion
-				__m256 _up	  = _mm256_loadu_ps(&arr[x		  + (y - 1) * this->size]);
+				__m256 _up  = _mm256_loadu_ps(&arr[x		  + (y - 1) * this->size]);
 				__m256 _left  = _mm256_loadu_ps(&arr[(x - 1)  + y		* this->size]);
 				__m256 _right = _mm256_loadu_ps(&arr[(x + 1)  + y		* this->size]);
 				__m256 _down  = _mm256_loadu_ps(&arr[x		  + (y + 1) * this->size]);
 
-				__m256 _cell;
-				_cell = _mm256_add_ps(_up, _left);
-				_cell = _mm256_add_ps(_cell, _right);
-				_cell = _mm256_add_ps(_cell, _down);
-
-				_cell = _mm256_mul_ps(_cell, _neighborDiffusion);
-
-				// Add the previous cell value and then multiply by reciprocalScaling
-				__m256 _previous = _mm256_loadu_ps(&prevArr[x + y * this->size]);
-				_cell = _mm256_add_ps(_cell, _previous);
+				/*
+				cell = previous;
+				cell +=	(up * neighborDiffusion);
+				cell += (left * neighborDiffusion);
+				cell += (right * neighborDiffusion); 
+				cell += (down * neighborDiffusion);
+				cell *= reciprocalScaling				
+				*/
+				__m256 _cell = _mm256_loadu_ps(&prevArr[x + y * this->size]);
+				_cell = _mm256_fmadd_ps(_up, _neighborDiffusion, _cell);
+				_cell = _mm256_fmadd_ps(_left, _neighborDiffusion, _cell);
+				_cell = _mm256_fmadd_ps(_right, _neighborDiffusion, _cell);
+				_cell = _mm256_fmadd_ps(_down, _neighborDiffusion, _cell);			
 				_cell = _mm256_mul_ps(_cell, _reciprocalScaling);
 
 				// Store result
