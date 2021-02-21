@@ -16,6 +16,7 @@ private:
 	float *density, *prevDensity;
 	float *velocityX, *prevVelocityX;
 	float *velocityY, *prevVelocityY;
+	float *tmp;
 
 	int		size;
 

@@ -1,6 +1,7 @@
 #include "FluidGrid.h"
 #include <iostream>
 #include <algorithm>
+#include <immintrin.h>
 
 FluidGrid::FluidGrid(int size) {
 	density = (float *)calloc(size * size, sizeof(float));
@@ -11,6 +12,8 @@ FluidGrid::FluidGrid(int size) {
 
 	velocityY = (float *)calloc(size * size, sizeof(float));
 	prevVelocityY = (float *)calloc(size * size, sizeof(float));
+
+	tmp = (float *)calloc(size * size, sizeof(float));
 
 	this->size = size;
 
@@ -26,6 +29,7 @@ FluidGrid::~FluidGrid() {
 	free(prevVelocityX);
 	free(velocityY);
 	free(prevVelocityY);
+	free(tmp);
 }
 
 void FluidGrid::step(float dt, int iterations, float diffusionRate, float viscosity, float fadeRate) {
@@ -137,24 +141,40 @@ void FluidGrid::diffuse(Direction direction, int iterations, float *arr, float *
 	linearSolve(direction, iterations, arr, prevArr, neighborDiffusion, scaling);
 }
 
-// Using Gauss-Seidel relaxation
+// Using Jacobi relaxation
 void FluidGrid::linearSolve(Direction direction, int iterations, float *arr, float *prevArr, float neighborDiffusion, float scaling) {
 	float reciprocalScaling = 1.0f / scaling;
+	// _mm256_set1_ps(reciprocalScaling)
+	// _mm256_set1_ps(neighborDiffusion)
 
 	for (int iteration = 0; iteration < iterations; iteration++) {
 		for (int y = 1; y < this->size - 1; y++) {
 			for (int x = 1; x < this->size - 1; x++) {
-				float previous = prevArr[x + y * this->size];
-				float neighbors = 
+				// _mm256_loadu_ps(up)
+				// _mm256_loadu_ps(left)
+				// _mm256_loadu_ps(right)
+				// _mm256_loadu_ps(down)
+				float neighbors =
 					neighborDiffusion * (
-						arr[x	  + ((y-1) * this->size)] +
-						arr[x	  + ((y+1) * this->size)] +
-						arr[(x-1) + (y	   * this->size)] +
-						arr[(x+1) + (y	   * this->size)]
-					);
-				arr[x + y * this->size] = (previous + neighbors) * reciprocalScaling;
+						arr[x + ((y - 1) * this->size)] +
+						arr[x + ((y + 1) * this->size)] +
+						arr[(x - 1) + (y * this->size)] +
+						arr[(x + 1) + (y * this->size)]
+						);
+				// _mm256_add_ps(up, left)
+				// _mm256_add_ps(reight, cell)
+				// _mm256_add_ps(down, cell)
+				// _mm256_mul_ps(neighborDiffusion, cell)
+				float previous = prevArr[x + y * this->size];
+				// _mm256_loadu_ps(previous)
+				tmp[x + y * this->size] = (previous + neighbors) * reciprocalScaling;
+				// _mm256_add_ps(cell, previous)
+				// _mm256_mul_ps(cell, reciprocalScaling)
+				// _mm256_storeu_ps(cell)
 			}
 		}
+		std::swap(tmp, arr);
+
 		// Controlling boundary after every iterations
 		setBounds(direction, arr);
 	}
