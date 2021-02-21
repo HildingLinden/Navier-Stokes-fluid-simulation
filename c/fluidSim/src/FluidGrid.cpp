@@ -144,16 +144,37 @@ void FluidGrid::diffuse(Direction direction, int iterations, float *arr, float *
 // Using Jacobi relaxation
 void FluidGrid::linearSolve(Direction direction, int iterations, float *arr, float *prevArr, float neighborDiffusion, float scaling) {
 	float reciprocalScaling = 1.0f / scaling;
-	// _mm256_set1_ps(reciprocalScaling)
-	// _mm256_set1_ps(neighborDiffusion)
+	__m256 _reciprocalScaling = _mm256_set1_ps(reciprocalScaling);
+	__m256 _neighborDiffusion = _mm256_set1_ps(neighborDiffusion);
 
 	for (int iteration = 0; iteration < iterations; iteration++) {
 		for (int y = 1; y < this->size - 1; y++) {
-			for (int x = 1; x < this->size - 1; x++) {
-				// _mm256_loadu_ps(up)
-				// _mm256_loadu_ps(left)
-				// _mm256_loadu_ps(right)
-				// _mm256_loadu_ps(down)
+			int x = 1;
+			for ( ; x < this->size - 1; x+= 8) {
+				// Add up, left, right & down together and then multiply with neighborDiffusion
+				__m256 _up	  = _mm256_loadu_ps(&arr[x		  + (y - 1) * this->size]);
+				__m256 _left  = _mm256_loadu_ps(&arr[(x - 1)  + y		* this->size]);
+				__m256 _right = _mm256_loadu_ps(&arr[(x + 1)  + y		* this->size]);
+				__m256 _down  = _mm256_loadu_ps(&arr[x		  + (y + 1) * this->size]);
+
+				__m256 _cell;
+				_cell = _mm256_add_ps(_up, _left);
+				_cell = _mm256_add_ps(_cell, _right);
+				_cell = _mm256_add_ps(_cell, _down);
+
+				_cell = _mm256_mul_ps(_cell, _neighborDiffusion);
+
+				// Add the previous cell value and then multiply by reciprocalScaling
+				__m256 _previous = _mm256_loadu_ps(&prevArr[x + y * this->size]);
+				_cell = _mm256_add_ps(_cell, _previous);
+				_cell = _mm256_mul_ps(_cell, _reciprocalScaling);
+
+				// Store result
+				_mm256_storeu_ps(&tmp[x + y * this->size], _cell);
+			}
+
+			// Take care of rest of the cells if x-2 is not evenly divisible by 8
+			for ( ; x < this->size - 1; x++) {
 				float neighbors =
 					neighborDiffusion * (
 						arr[x + ((y - 1) * this->size)] +
@@ -161,16 +182,8 @@ void FluidGrid::linearSolve(Direction direction, int iterations, float *arr, flo
 						arr[(x - 1) + (y * this->size)] +
 						arr[(x + 1) + (y * this->size)]
 						);
-				// _mm256_add_ps(up, left)
-				// _mm256_add_ps(reight, cell)
-				// _mm256_add_ps(down, cell)
-				// _mm256_mul_ps(neighborDiffusion, cell)
 				float previous = prevArr[x + y * this->size];
-				// _mm256_loadu_ps(previous)
 				tmp[x + y * this->size] = (previous + neighbors) * reciprocalScaling;
-				// _mm256_add_ps(cell, previous)
-				// _mm256_mul_ps(cell, reciprocalScaling)
-				// _mm256_storeu_ps(cell)
 			}
 		}
 		std::swap(tmp, arr);
