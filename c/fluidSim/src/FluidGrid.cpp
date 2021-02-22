@@ -1,9 +1,12 @@
 #include "FluidGrid.h"
 #include <iostream>
 #include <algorithm>
+#include <chrono>
 #include <immintrin.h>
 
 FluidGrid::FluidGrid(int size) {
+	printT0 = std::chrono::steady_clock::now();
+
 	density = (float *)calloc(size * size, sizeof(float));
 	prevDensity = (float *)calloc(size * size, sizeof(float));
 
@@ -32,7 +35,7 @@ FluidGrid::~FluidGrid() {
 	free(tmp);
 }
 
-void FluidGrid::step(float dt, int iterations, float diffusionRate, float viscosity, float fadeRate) {
+void FluidGrid::step(float dt, int iterations, double diffusionRate, double viscosity, double fadeRate) {
 	// Diffuse X velocity
 	std::swap(this->velocityX, this->prevVelocityX);
 	diffuse(Direction::HORIZONTAL, iterations, this->velocityX, this->prevVelocityX, dt, viscosity);
@@ -47,8 +50,13 @@ void FluidGrid::step(float dt, int iterations, float diffusionRate, float viscos
 	// Self advection
 	std::swap(this->velocityX, this->prevVelocityX);
 	std::swap(this->velocityY, this->prevVelocityY);
+	startTimer();
 	advect(Direction::HORIZONTAL, this->velocityX, this->prevVelocityX, this->prevVelocityX, this->prevVelocityY, dt);
+	endTimer("Advect");
+
+	startTimer();
 	advect(Direction::VERTICAL, this->velocityY, this->prevVelocityY, this->prevVelocityX, this->prevVelocityY, dt);
+	endTimer("Advect");
 
 	// Conserve mass of the velocity field
 	project(iterations, this->velocityX, this->velocityY, this->prevVelocityX, this->prevVelocityY);
@@ -59,15 +67,19 @@ void FluidGrid::step(float dt, int iterations, float diffusionRate, float viscos
 
 	// Advect density
 	std::swap(this->density, this->prevDensity);
+	startTimer();
 	advect(Direction::NONE, this->density, this->prevDensity, this->velocityX, this->velocityY, dt);
+	endTimer("Advect");
 
 	// Fade the density to avoid filling the volume
 	fadeDensity(dt, fadeRate);
+
+	checkPrint();
 }
 
 void FluidGrid::addVelocity(int x, int y, float amountX, float amountY, float dt) {
-		this->velocityX[x + y * this->size] += amountX * dt * this->size;
-		this->velocityY[x + y * this->size] += amountY * dt * this->size;
+	this->velocityX[x + y * this->size] += amountX * dt * this->size;
+	this->velocityY[x + y * this->size] += amountY * dt * this->size;
 }
 
 void FluidGrid::addDensity(int x, int y, float amount, float dt) {
@@ -75,27 +87,44 @@ void FluidGrid::addDensity(int x, int y, float amount, float dt) {
 }
 
 // Linear backtrace
-void FluidGrid::advect(Direction direction, float *arr, float *prevArr, float *velX, float *velyY, float dt) {
+void FluidGrid::advect(Direction direction, float *arr, float *prevArr, float *velX, float *velY, float dt) {
+	float scaling = dt * this->size;
+	float maxClamp = this->size - 1.5f;
+
 	for (int y = 1; y < size-1; y++) {
 		for (int x = 1; x < size-1; x++) {
-			float prevX = x - velX[x+y*size] * dt * this->size;
-			float prevY = y - velyY[x+y*size] * dt * this->size;
+			// Subtract velocity from current cell to get previous cell indices
+			float prevX = x - velX[x+y*size] * scaling;
+			float prevY = y - velY[x+y*size] * scaling;
 
-			prevX = std::clamp(prevX, 0.5f, size - 1.5f);
-			prevY = std::clamp(prevY, 0.5f, size - 1.5f);
+			// Clamp previous cells in case they are outside of the domain
+			prevX = std::clamp(prevX, 0.5f, maxClamp);
+			prevY = std::clamp(prevY, 0.5f, maxClamp);
 
+			/*
+			Casting the index of the previous cell to integers truncates the index which means that
+			the index is moved up and to the left
+			*/
 			int prevXInt = (int)prevX;
 			int prevYInt = (int)prevY;
 
+			/*
+			To interpolate we then:
+				multiply the decimals of x and y with the cell below and to the right
+				multiply the decimals of x and remaining decimals of y with the cell to the right
+				multiply the decimals of y and remaining decimals of x with the cell above
+				multiply the remaining decimals of x and y with the current cell
+			and add them all together
+			*/
 			float prevXDecimals = prevX - prevXInt;
-			float prevXDecimalsRemainder = 1.0f - prevXDecimals;
+			float prevXRemainingDecimals = 1.0f - prevXDecimals;
 
 			float prevYDecimals = prevY - prevYInt;
-			float prevYDecimalsRemainder = 1.0f - prevYDecimals;
-
+			float prevYRemainingDecimals = 1.0f - prevYDecimals;
+			
 			arr[x + y * this->size] =
-				prevXDecimalsRemainder * (prevYDecimalsRemainder * prevArr[prevXInt	    + prevYInt * this->size] + prevYDecimals * prevArr[prevXInt	   + (prevYInt+1) * this->size]) +
-				prevXDecimals		   * (prevYDecimalsRemainder * prevArr[(prevXInt+1) + prevYInt * this->size] + prevYDecimals * prevArr[(prevXInt+1) + (prevYInt+1) * this->size]);
+				prevXRemainingDecimals * (prevYRemainingDecimals * prevArr[prevXInt	    + prevYInt * this->size] + prevYDecimals * prevArr[prevXInt	   + (prevYInt+1) * this->size]) +
+				prevXDecimals		   * (prevYRemainingDecimals * prevArr[(prevXInt+1) + prevYInt * this->size] + prevYDecimals * prevArr[(prevXInt+1) + (prevYInt+1) * this->size]);
 		}
 	}
 
@@ -199,7 +228,7 @@ void FluidGrid::project(int iterations, float *velocityX, float *velocityY, floa
 }
 
 // Mass conserving
-void FluidGrid::diffuse(Direction direction, int iterations, float *arr, float *prevArr, float dt, float diffusion) {
+void FluidGrid::diffuse(Direction direction, int iterations, float *arr, float *prevArr, float dt, double diffusion) {
 	float neighborDiffusion = diffusion * dt * this->size * this->size;
 	float scaling = 1 + 4 * neighborDiffusion;
 
@@ -279,12 +308,47 @@ void FluidGrid::setBounds(Direction direction, float *arr) {
 	arr[(size-1) + (size-1) * size] = 0.5f * (arr[(size-2) + (size-1) * size] + arr[(size-1) + (size-2) * size]);
 }
 
-void FluidGrid::fadeDensity(float dt, float fadeRate) {
+void FluidGrid::fadeDensity(float dt, double fadeRate) {
+	double scaledFadeRate = 1 - dt * fadeRate * this->size;
 	for (int y = 1; y < this->size - 1; y++) {
 		for (int x = 1; x < this->size - 1; x++) {
-			this->density[x + y * this->size] *= 1 - dt * fadeRate * this->size;
+			this->density[x + y * this->size] *= scaledFadeRate;
 		}
 	}
+}
+
+void FluidGrid::startTimer() {
+	timerT0 = std::chrono::steady_clock::now();
+}
+
+void FluidGrid::endTimer(std::string timerName) {
+	auto t1 = std::chrono::steady_clock::now();
+	std::chrono::duration<double, std::micro> microSeconds = t1 - timerT0;
+	
+	std::map<std::string, double>::iterator iterator = timers.find(timerName);
+	if (iterator != timers.end()) {
+		iterator->second += microSeconds.count();
+	}
+	else {
+		timers.insert(std::pair<std::string, double>(timerName, microSeconds.count()));
+	}
+}
+
+void FluidGrid::checkPrint() {
+	runs++;
+	auto printT1 = std::chrono::steady_clock::now();
+	std::chrono::duration<double, std::micro> printMicroSeconds = printT1 - printT0;
+	microsSinceLastPrint += printMicroSeconds.count();
+	if (microsSinceLastPrint > 1000000.0) {
+		for (std::map<std::string, double>::iterator iterator = timers.begin(); iterator != timers.end(); iterator++) {
+			std::cout << iterator->first << ": " << iterator->second / runs << " microseconds" << std::endl;
+			iterator->second = 0;
+		}
+		microsSinceLastPrint = 0;
+		runs = 0;
+	}
+
+	printT0 = printT1;
 }
 
 float *FluidGrid::getDensity() {
