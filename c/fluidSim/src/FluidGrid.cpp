@@ -101,10 +101,10 @@ void FluidGrid::advect(Direction direction, float *arr, float *prevArr, float *v
 	for (int y = 1; y < size-1; y++) {
 		int x = 1;
 		
-		__m256 _y = _mm256_set1_ps(y);
+		__m256 _y = _mm256_set1_ps((float)y);
 		for (; x < size - 9; x += 8) {
 			// Increment x by 0 to 7 since we are computing 8 iterations of x at once
-			__m256 _x = _mm256_set1_ps(x);
+			__m256 _x = _mm256_set1_ps((float)x);
 			_x = _mm256_add_ps(_x, _xIncrements);
 
 			// Subtract the current scaled velocity from y and incremented x
@@ -200,7 +200,7 @@ void FluidGrid::advect(Direction direction, float *arr, float *prevArr, float *v
 }
 
 // Hodge decomposition
-void FluidGrid::project(int iterations, float *velocityX, float *velocityY, float *p, float *div) {
+void FluidGrid::project(int iterations, float *velX, float *velY, float *p, float *div) {
 	float sizeReciprocal = 1.0f / this->size;
 
 	__m256 _sizeReciprocal = _mm256_set1_ps(sizeReciprocal);
@@ -219,10 +219,10 @@ void FluidGrid::project(int iterations, float *velocityX, float *velocityY, floa
 			cell *= -0.5
 			cell *= sizeReciprocal
 			*/
-			__m256 _up = _mm256_loadu_ps(&velocityY[x + (y - 1) * this->size]);
-			__m256 _down = _mm256_loadu_ps(&velocityY[x + (y + 1) * this->size]);
-			__m256 _left = _mm256_loadu_ps(&velocityX[(x - 1) + y * this->size]);
-			__m256 _right = _mm256_loadu_ps(&velocityX[(x + 1) + y * this->size]);
+			__m256 _up = _mm256_loadu_ps(&velY[x + (y - 1) * this->size]);
+			__m256 _down = _mm256_loadu_ps(&velY[x + (y + 1) * this->size]);
+			__m256 _left = _mm256_loadu_ps(&velX[(x - 1) + y * this->size]);
+			__m256 _right = _mm256_loadu_ps(&velX[(x + 1) + y * this->size]);
 
 			__m256 _x = _mm256_sub_ps(_left, _right);
 			__m256 _y = _mm256_sub_ps(_up, _down);
@@ -237,8 +237,8 @@ void FluidGrid::project(int iterations, float *velocityX, float *velocityY, floa
 		for (; x < this->size - 1; x++) {
 			div[x + y * size] =
 				-0.5f * (
-					velocityX[(x - 1) + y * this->size] - velocityX[(x + 1) + y * this->size] +
-					velocityY[x + (y - 1) * this->size] - velocityY[x + (y + 1) * this->size]
+					velX[(x - 1) + y * this->size] - velX[(x + 1) + y * this->size] +
+					velY[x + (y - 1) * this->size] - velY[x + (y + 1) * this->size]
 					) * sizeReciprocal;
 			p[x + y * size] = 0;
 		}
@@ -249,7 +249,7 @@ void FluidGrid::project(int iterations, float *velocityX, float *velocityY, floa
 	linearSolve(Direction::NONE, iterations, p, div, 1, 4);
 
 	// Compute mass conserving field (Velocity field - Height field)
-	__m256 _size = _mm256_set1_ps(this->size);
+	__m256 _size = _mm256_set1_ps((float)this->size);
 
 	for (int y = 1; y < this->size - 1; y++) {
 		int x = 1;
@@ -296,7 +296,7 @@ void FluidGrid::project(int iterations, float *velocityX, float *velocityY, floa
 
 // Mass conserving
 void FluidGrid::diffuse(Direction direction, int iterations, float *arr, float *prevArr, float dt, double diffusion) {
-	float neighborDiffusion = diffusion * dt * this->size * this->size;
+	float neighborDiffusion = (float)(diffusion * dt * this->size * this->size);
 	float scaling = 1 + 4 * neighborDiffusion;
 
 	linearSolve(direction, iterations, arr, prevArr, neighborDiffusion, scaling);
@@ -379,7 +379,7 @@ void FluidGrid::fadeDensity(float dt, double fadeRate) {
 	double scaledFadeRate = 1 - dt * fadeRate * this->size;
 	for (int y = 1; y < this->size - 1; y++) {
 		for (int x = 1; x < this->size - 1; x++) {
-			this->density[x + y * this->size] *= scaledFadeRate;
+			this->density[x + y * this->size] *= (float)scaledFadeRate;
 		}
 	}
 }
