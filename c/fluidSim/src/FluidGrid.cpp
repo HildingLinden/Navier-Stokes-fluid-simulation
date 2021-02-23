@@ -91,8 +91,76 @@ void FluidGrid::advect(Direction direction, float *arr, float *prevArr, float *v
 	float scaling = dt * this->size;
 	float maxClamp = this->size - 1.5f;
 
+	__m256 _xIncrements = _mm256_set_ps(7.0f, 6.0f, 5.0f, 4.0f, 3.0f, 2.0f, 1.0f, 0.0f);
+	__m256 _scaling = _mm256_set1_ps(scaling);
+	__m256 _maxClamp = _mm256_set1_ps(maxClamp);
+	__m256 _minClamp = _mm256_set1_ps(0.5f);
+	__m256 _one = _mm256_set1_ps(1.0f);
+	__m256i _size = _mm256_set1_epi32(this->size);
+
 	for (int y = 1; y < size-1; y++) {
-		for (int x = 1; x < size-1; x++) {
+		int x = 1;
+		
+		__m256 _y = _mm256_set1_ps(y);
+		for (; x < size - 9; x += 8) {
+			// Increment x by 0 to 7 since we are computing 8 iterations of x at once
+			__m256 _x = _mm256_set1_ps(x);
+			_x = _mm256_add_ps(_x, _xIncrements);
+
+			// Subtract the current scaled velocity from y and incremented x
+			__m256 _prevX = _mm256_load_ps(&velX[x + y * size]);
+			__m256 _prevY = _mm256_load_ps(&velY[x + y * size]);
+
+			_prevX = _mm256_mul_ps(_prevX, _scaling);
+			_prevY = _mm256_mul_ps(_prevY, _scaling);
+			_prevX = _mm256_sub_ps(_x, _prevX);
+			_prevY = _mm256_sub_ps(_y, _prevY);
+
+			// Clamp indices to minClamp and maxClamp
+			_prevX = _mm256_max_ps(_prevX, _minClamp);
+			_prevX = _mm256_min_ps(_prevX, _maxClamp);
+			_prevY = _mm256_max_ps(_prevY, _minClamp);
+			_prevY = _mm256_min_ps(_prevY, _maxClamp);
+
+			// Get the integer part and decimal part of the indices
+			// as well as 1 - decimal part
+			__m256 _prevXRound = _mm256_floor_ps(_prevX);
+			__m256 _prevYRound = _mm256_floor_ps(_prevY);
+
+			__m256i _prevXInt = _mm256_cvtps_epi32(_prevXRound);
+			__m256i _prevYInt = _mm256_cvtps_epi32(_prevYRound);
+
+			__m256 _prevXDecimals = _mm256_sub_ps(_prevX, _prevXRound);
+			__m256 _prevYDecimals = _mm256_sub_ps(_prevY, _prevYRound);
+
+			__m256 _prevXRemainingDecimals = _mm256_sub_ps(_one, _prevXDecimals);
+			__m256 _prevYRemainingDecimals = _mm256_sub_ps(_one, _prevYDecimals);
+
+			// Multiply y by size and add x to get the actual indices
+			__m256i _prevIndices = _mm256_mullo_epi32(_prevYInt, _size);
+			_prevIndices = _mm256_add_epi32(_prevIndices, _prevXInt);
+
+			// Get the middle, right, down and downRight cells by changing the base address of the gather
+			__m256 _middle = _mm256_i32gather_ps(&prevArr[0], _prevIndices, sizeof(float));
+			__m256 _right = _mm256_i32gather_ps(&prevArr[1], _prevIndices, sizeof(float));
+			__m256 _down = _mm256_i32gather_ps(&prevArr[this->size], _prevIndices, sizeof(float));
+			__m256 _downRight = _mm256_i32gather_ps(&prevArr[this->size + 1], _prevIndices, sizeof(float));
+
+			// Do the linear interpolation (See below for explanation)
+			__m256 _middleScaling = _mm256_mul_ps(_prevXRemainingDecimals, _prevYRemainingDecimals);
+			__m256 _downScaling = _mm256_mul_ps(_prevXRemainingDecimals, _prevYDecimals);
+			__m256 _rightScaling = _mm256_mul_ps(_prevXDecimals, _prevYRemainingDecimals);
+			__m256 _downRightScaling = _mm256_mul_ps(_prevXDecimals, _prevYDecimals);
+
+			__m256 _result = _mm256_mul_ps(_middle, _middleScaling);
+			_result = _mm256_fmadd_ps(_down, _downScaling, _result);
+			_result = _mm256_fmadd_ps(_right, _rightScaling, _result);
+			_result = _mm256_fmadd_ps(_downRight, _downRightScaling, _result);
+
+			_mm256_storeu_ps(&arr[x + y * this->size], _result);
+		}
+
+		for ( ; x < size-1; x++) {
 			// Subtract velocity from current cell to get previous cell indices
 			float prevX = x - velX[x+y*size] * scaling;
 			float prevY = y - velY[x+y*size] * scaling;
@@ -143,14 +211,13 @@ void FluidGrid::project(int iterations, float *velocityX, float *velocityY, floa
 	for (int y = 1; y < this->size - 1; y++) {
 		int x = 1;
 
-		for ( ; x < this->size - 1; x+=8) {
+		for ( ; x < this->size - 9; x+=8) {
 			/*
 			x = x[left] - x[right]
 			y = y[up] - y[down]
 			cell = x + y
 			cell *= -0.5
 			cell *= sizeReciprocal
-			div = cell
 			*/
 			__m256 _up = _mm256_loadu_ps(&velocityY[x + (y - 1) * this->size]);
 			__m256 _down = _mm256_loadu_ps(&velocityY[x + (y + 1) * this->size]);
@@ -187,7 +254,7 @@ void FluidGrid::project(int iterations, float *velocityX, float *velocityY, floa
 	for (int y = 1; y < this->size - 1; y++) {
 		int x = 1;
 
-		for ( ; x < this->size - 1; x+=8) {
+		for ( ; x < this->size - 9; x+=8) {
 			__m256 _val, _oldVal;
 			/*
 			val = p[left] - p[right];
@@ -245,7 +312,7 @@ void FluidGrid::linearSolve(Direction direction, int iterations, float *arr, flo
 		for (int y = 1; y < this->size - 1; y++) {
 			int x = 1;
 
-			for ( ; x < this->size - 1; x+= 8) {
+			for ( ; x < this->size - 9; x+= 8) {
 				__m256 _up  = _mm256_loadu_ps(&arr[x		  + (y - 1) * this->size]);
 				__m256 _left  = _mm256_loadu_ps(&arr[(x - 1)  + y		* this->size]);
 				__m256 _right = _mm256_loadu_ps(&arr[(x + 1)  + y		* this->size]);
