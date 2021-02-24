@@ -18,11 +18,15 @@ FluidGrid::FluidGrid(int size) {
 
 	tmp = (float *)calloc(size * size, sizeof(float));
 
-	this->size = size;
-
 	if (!(density && prevDensity && velocityX && prevVelocityX && velocityY && prevVelocityY)) {
 		throw std::runtime_error("Failed to allocate memory for FluidGrid\n");
 	}
+
+	this->size = size;
+
+	// Optimal number of threads is 6 for quad-core with hyperthreading (6700k)
+	// except for resolutions under 200
+	threadPool.init(6);
 }
 
 FluidGrid::~FluidGrid() {
@@ -33,9 +37,12 @@ FluidGrid::~FluidGrid() {
 	free(velocityY);
 	free(prevVelocityY);
 	free(tmp);
+
+	// ThreadPool destructor is implicit called because it is stack allocated
 }
 
 void FluidGrid::step(float dt, int iterations, double diffusionRate, double viscosity, double fadeRate) {
+	startTimer();
 	// Diffuse X velocity
 	std::swap(this->velocityX, this->prevVelocityX);
 	diffuse(Direction::HORIZONTAL, iterations, this->velocityX, this->prevVelocityX, dt, viscosity);
@@ -43,31 +50,35 @@ void FluidGrid::step(float dt, int iterations, double diffusionRate, double visc
 	// Diffuse Y velocity
 	std::swap(this->velocityY, this->prevVelocityY);
 	diffuse(Direction::VERTICAL, iterations, this->velocityY, this->prevVelocityY, dt, viscosity);
+	endTimer("Diffuse");
 
+	startTimer();
 	// Conserve mass of the velocity field
 	project(iterations, this->velocityX, this->velocityY, this->prevVelocityX, this->prevVelocityY);
+	endTimer("Project");
 
+	startTimer();
 	// Self advection
 	std::swap(this->velocityX, this->prevVelocityX);
 	std::swap(this->velocityY, this->prevVelocityY);
-	startTimer();
 	advect(Direction::HORIZONTAL, this->velocityX, this->prevVelocityX, this->prevVelocityX, this->prevVelocityY, dt);
-	endTimer("Advect");
-
-	startTimer();
 	advect(Direction::VERTICAL, this->velocityY, this->prevVelocityY, this->prevVelocityX, this->prevVelocityY, dt);
 	endTimer("Advect");
 
+	startTimer();
 	// Conserve mass of the velocity field
 	project(iterations, this->velocityX, this->velocityY, this->prevVelocityX, this->prevVelocityY);
+	endTimer("Project");
 
+	startTimer();
 	// Diffuse density
 	std::swap(this->density, this->prevDensity);
 	diffuse(Direction::NONE, iterations, this->density, this->prevDensity, dt, diffusionRate);
+	endTimer("Diffuse");
 
+	startTimer();
 	// Advect density
 	std::swap(this->density, this->prevDensity);
-	startTimer();
 	advect(Direction::NONE, this->density, this->prevDensity, this->velocityX, this->velocityY, dt);
 	endTimer("Advect");
 
@@ -88,6 +99,18 @@ void FluidGrid::addDensity(int x, int y, float amount, float dt) {
 
 // Linear backtrace
 void FluidGrid::advect(Direction direction, float *arr, float *prevArr, float *velX, float *velY, float dt) {
+	threadPool.computeOnThreads(
+		size, 
+		[&](int startIndex, int endIndex) {
+			advectLoop(startIndex, endIndex, arr, prevArr, velX, velY, dt); 
+		}
+	);
+
+	setBounds(direction, arr);
+}
+
+void FluidGrid::advectLoop(int startIndex, int endIndex, float *arr, float *prevArr, float *velX, float *velY, float dt)
+{
 	float scaling = dt * this->size;
 	float maxClamp = this->size - 1.5f;
 
@@ -98,9 +121,9 @@ void FluidGrid::advect(Direction direction, float *arr, float *prevArr, float *v
 	__m256 _one = _mm256_set1_ps(1.0f);
 	__m256i _size = _mm256_set1_epi32(this->size);
 
-	for (int y = 1; y < size-1; y++) {
+	for (int y = 1; y < size - 1; y++) {
 		int x = 1;
-		
+
 		__m256 _y = _mm256_set1_ps((float)y);
 		for (; x < size - 9; x += 8) {
 			// Increment x by 0 to 7 since we are computing 8 iterations of x at once
@@ -160,10 +183,10 @@ void FluidGrid::advect(Direction direction, float *arr, float *prevArr, float *v
 			_mm256_storeu_ps(&arr[x + y * this->size], _result);
 		}
 
-		for ( ; x < size-1; x++) {
+		for (; x < size - 1; x++) {
 			// Subtract velocity from current cell to get previous cell indices
-			float prevX = x - velX[x+y*size] * scaling;
-			float prevY = y - velY[x+y*size] * scaling;
+			float prevX = x - velX[x + y * size] * scaling;
+			float prevY = y - velY[x + y * size] * scaling;
 
 			// Clamp previous cells in case they are outside of the domain
 			prevX = std::clamp(prevX, 0.5f, maxClamp);
@@ -189,29 +212,46 @@ void FluidGrid::advect(Direction direction, float *arr, float *prevArr, float *v
 
 			float prevYDecimals = prevY - prevYInt;
 			float prevYRemainingDecimals = 1.0f - prevYDecimals;
-			
+
 			arr[x + y * this->size] =
-				prevXRemainingDecimals * (prevYRemainingDecimals * prevArr[prevXInt	    + prevYInt * this->size] + prevYDecimals * prevArr[prevXInt	   + (prevYInt+1) * this->size]) +
-				prevXDecimals		   * (prevYRemainingDecimals * prevArr[(prevXInt+1) + prevYInt * this->size] + prevYDecimals * prevArr[(prevXInt+1) + (prevYInt+1) * this->size]);
+				prevXRemainingDecimals * (prevYRemainingDecimals * prevArr[prevXInt + prevYInt * this->size] + prevYDecimals * prevArr[prevXInt + (prevYInt + 1) * this->size]) +
+				prevXDecimals * (prevYRemainingDecimals * prevArr[(prevXInt + 1) + prevYInt * this->size] + prevYDecimals * prevArr[(prevXInt + 1) + (prevYInt + 1) * this->size]);
 		}
 	}
-
-	setBounds(direction, arr);
 }
 
 // Hodge decomposition
 void FluidGrid::project(int iterations, float *velX, float *velY, float *p, float *div) {
+	/* 
+	Compute height field (Poisson-pressure equation on threads
+	*/
+	threadPool.computeOnThreads(size, [&](int startIndex, int endIndex) {projectHeightMapLoop(startIndex, endIndex, velX, velY, p, div); });
+
+	setBounds(Direction::NONE, div);
+	setBounds(Direction::NONE, p);
+	linearSolve(Direction::NONE, iterations, p, div, 1, 4);
+
+	/*
+	Compute mass conserving field (Velocity field - Height field) on threads
+	*/
+	threadPool.computeOnThreads(size, [&](int startIndex, int endIndex) {projectMassConservLoop(startIndex, endIndex, p, div); });
+
+	setBounds(Direction::HORIZONTAL, velocityX);
+	setBounds(Direction::VERTICAL, velocityY);
+}
+
+void FluidGrid::projectHeightMapLoop(int startIndex, int endIndex, float *velX, float *velY, float *p, float *div)
+{
 	float sizeReciprocal = 1.0f / this->size;
 
 	__m256 _sizeReciprocal = _mm256_set1_ps(sizeReciprocal);
 	__m256 _minusHalf = _mm256_set1_ps(-0.5f);
 	__m256 _zero = _mm256_setzero_ps();
 
-	// Compute height field (Poisson-pressure equation)
-	for (int y = 1; y < this->size - 1; y++) {
+	for (int y = startIndex; y < endIndex; y++) {
 		int x = 1;
 
-		for ( ; x < this->size - 9; x+=8) {
+		for (; x < this->size - 9; x += 8) {
 			/*
 			x = x[left] - x[right]
 			y = y[up] - y[down]
@@ -243,26 +283,25 @@ void FluidGrid::project(int iterations, float *velX, float *velY, float *p, floa
 			p[x + y * size] = 0;
 		}
 	}
+}
 
-	setBounds(Direction::NONE, div);
-	setBounds(Direction::NONE, p);
-	linearSolve(Direction::NONE, iterations, p, div, 1, 4);
-
-	// Compute mass conserving field (Velocity field - Height field)
+void FluidGrid::projectMassConservLoop(int startIndex, int endIndex, float *p, float *div)
+{
 	__m256 _size = _mm256_set1_ps((float)this->size);
+	__m256 _minusHalf = _mm256_set1_ps(-0.5f);
 
-	for (int y = 1; y < this->size - 1; y++) {
+	for (int y = startIndex; y < endIndex; y++) {
 		int x = 1;
 
-		for ( ; x < this->size - 9; x+=8) {
+		for (; x < this->size - 9; x += 8) {
 			__m256 _val, _oldVal;
 			/*
 			val = p[left] - p[right];
 			val *= size;
 			oldVal += -0.5f * val;
 			*/
-			__m256 _left  = _mm256_loadu_ps(&p[(x - 1) + y * this->size]);
-			__m256 _right = _mm256_loadu_ps(&p[(x + 1) + y * this->size]);			
+			__m256 _left = _mm256_loadu_ps(&p[(x - 1) + y * this->size]);
+			__m256 _right = _mm256_loadu_ps(&p[(x + 1) + y * this->size]);
 			_val = _mm256_sub_ps(_left, _right);
 			_val = _mm256_mul_ps(_val, _size);
 			_oldVal = _mm256_loadu_ps(&velocityX[x + y * this->size]);
@@ -289,9 +328,6 @@ void FluidGrid::project(int iterations, float *velX, float *velY, float *p, floa
 			velocityY[x + y * this->size] -= 0.5f * (p[x + (y - 1) * this->size] - p[x + (y + 1) * this->size]) * this->size;
 		}
 	}
-
-	setBounds(Direction::HORIZONTAL, velocityX);
-	setBounds(Direction::VERTICAL, velocityY);
 }
 
 // Mass conserving
@@ -309,51 +345,66 @@ void FluidGrid::linearSolve(Direction direction, int iterations, float *arr, flo
 	__m256 _neighborDiffusion = _mm256_set1_ps(neighborDiffusion);
 
 	for (int iteration = 0; iteration < iterations; iteration++) {
-		for (int y = 1; y < this->size - 1; y++) {
-			int x = 1;
-
-			for ( ; x < this->size - 9; x+= 8) {
-				__m256 _up  = _mm256_loadu_ps(&arr[x		  + (y - 1) * this->size]);
-				__m256 _left  = _mm256_loadu_ps(&arr[(x - 1)  + y		* this->size]);
-				__m256 _right = _mm256_loadu_ps(&arr[(x + 1)  + y		* this->size]);
-				__m256 _down  = _mm256_loadu_ps(&arr[x		  + (y + 1) * this->size]);
-
-				/*
-				cell = previous;
-				cell +=	(up * neighborDiffusion);
-				cell += (left * neighborDiffusion);
-				cell += (right * neighborDiffusion); 
-				cell += (down * neighborDiffusion);
-				cell *= reciprocalScaling				
-				*/
-				__m256 _cell = _mm256_loadu_ps(&prevArr[x + y * this->size]);
-				_cell = _mm256_fmadd_ps(_up, _neighborDiffusion, _cell);
-				_cell = _mm256_fmadd_ps(_left, _neighborDiffusion, _cell);
-				_cell = _mm256_fmadd_ps(_right, _neighborDiffusion, _cell);
-				_cell = _mm256_fmadd_ps(_down, _neighborDiffusion, _cell);			
-				_cell = _mm256_mul_ps(_cell, _reciprocalScaling);
-
-				// Store result
-				_mm256_storeu_ps(&tmp[x + y * this->size], _cell);
+		
+		/*
+		Run on threads
+		*/
+		threadPool.computeOnThreads(
+			size,
+			[&](int startIndex, int endIndex) {
+				linearSolveLoop(startIndex, endIndex, arr, prevArr, neighborDiffusion,  _neighborDiffusion, reciprocalScaling, _reciprocalScaling);
 			}
+		);
 
-			// Take care of rest of the cells if x-2 is not evenly divisible by 8
-			for ( ; x < this->size - 1; x++) {
-				float neighbors =
-					neighborDiffusion * (
-						arr[x + ((y - 1) * this->size)] +
-						arr[x + ((y + 1) * this->size)] +
-						arr[(x - 1) + (y * this->size)] +
-						arr[(x + 1) + (y * this->size)]
-						);
-				float previous = prevArr[x + y * this->size];
-				tmp[x + y * this->size] = (previous + neighbors) * reciprocalScaling;
-			}
-		}
 		std::swap(tmp, arr);
 
 		// Controlling boundary after every iterations
 		setBounds(direction, arr);
+	}
+}
+
+void FluidGrid::linearSolveLoop(int startIndex, int endIndex, float *arr, float *prevArr, float neighborDiffusion, __m256 _neighborDiffusion, float reciprocalScaling, __m256 _reciprocalScaling)
+{
+	for (int y = startIndex; y < endIndex; y++) {
+		int x = 1;
+
+		for (; x < size - 9; x += 8) {
+			__m256 _up = _mm256_loadu_ps(&arr[x + (y - 1) * size]);
+			__m256 _left = _mm256_loadu_ps(&arr[(x - 1) + y * size]);
+			__m256 _right = _mm256_loadu_ps(&arr[(x + 1) + y * size]);
+			__m256 _down = _mm256_loadu_ps(&arr[x + (y + 1) * size]);
+
+			/*
+			cell = previous;
+			cell +=	(up * neighborDiffusion);
+			cell += (left * neighborDiffusion);
+			cell += (right * neighborDiffusion);
+			cell += (down * neighborDiffusion);
+			cell *= reciprocalScaling
+			*/
+			__m256 _cell = _mm256_loadu_ps(&prevArr[x + y * size]);
+			_cell = _mm256_fmadd_ps(_up, _neighborDiffusion, _cell);
+			_cell = _mm256_fmadd_ps(_left, _neighborDiffusion, _cell);
+			_cell = _mm256_fmadd_ps(_right, _neighborDiffusion, _cell);
+			_cell = _mm256_fmadd_ps(_down, _neighborDiffusion, _cell);
+			_cell = _mm256_mul_ps(_cell, _reciprocalScaling);
+
+			// Store result
+			_mm256_storeu_ps(&tmp[x + y * size], _cell);
+		}
+
+		// Take care of rest of the cells if x-2 is not evenly divisible by 8
+		for (; x < size - 1; x++) {
+			float neighbors =
+				neighborDiffusion * (
+					arr[x + ((y - 1) * size)] +
+					arr[x + ((y + 1) * size)] +
+					arr[(x - 1) + (y * this->size)] +
+					arr[(x + 1) + (y * this->size)]
+					);
+			float previous = prevArr[x + y * this->size];
+			tmp[x + y * this->size] = (previous + neighbors) * reciprocalScaling;
+		}
 	}
 }
 
@@ -408,9 +459,10 @@ void FluidGrid::checkPrint() {
 	microsSinceLastPrint += printMicroSeconds.count();
 	if (microsSinceLastPrint > 1000000.0) {
 		for (std::map<std::string, double>::iterator iterator = timers.begin(); iterator != timers.end(); iterator++) {
-			std::cout << iterator->first << ": " << iterator->second / runs << " microseconds" << std::endl;
+			std::cout << iterator->first << ": " << iterator->second / runs << " microseconds\n";
 			iterator->second = 0;
 		}
+		std::cout << std::endl;
 		microsSinceLastPrint = 0;
 		runs = 0;
 	}
