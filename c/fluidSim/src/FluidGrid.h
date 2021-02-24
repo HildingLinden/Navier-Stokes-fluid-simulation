@@ -34,6 +34,7 @@ private:
 	ThreadPool threadPool;
 
 	void	advect(Direction direction, float *arr, float *prevArr, float *velocityX, float *velocityY, float dt);
+	void	advectLoop(int startIndex, int endIndex, float *arr, float *prevArr, float *velX, float *velY, float dt);
 	void	project(int iterations, float *velocityX, float *velocityY, float *p, float *div);
 	void	projectHeightMapLoop(int startIndex, int endIndex, float *velX, float *velY, float *p, float *div);
 	void	projectMassConservLoop(int startIndex, int endIndex, float *p, float *div);

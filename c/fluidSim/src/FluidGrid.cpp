@@ -42,6 +42,7 @@ FluidGrid::~FluidGrid() {
 }
 
 void FluidGrid::step(float dt, int iterations, double diffusionRate, double viscosity, double fadeRate) {
+	startTimer();
 	// Diffuse X velocity
 	std::swap(this->velocityX, this->prevVelocityX);
 	diffuse(Direction::HORIZONTAL, iterations, this->velocityX, this->prevVelocityX, dt, viscosity);
@@ -49,26 +50,37 @@ void FluidGrid::step(float dt, int iterations, double diffusionRate, double visc
 	// Diffuse Y velocity
 	std::swap(this->velocityY, this->prevVelocityY);
 	diffuse(Direction::VERTICAL, iterations, this->velocityY, this->prevVelocityY, dt, viscosity);
+	endTimer("Diffuse");
 
+	startTimer();
 	// Conserve mass of the velocity field
 	project(iterations, this->velocityX, this->velocityY, this->prevVelocityX, this->prevVelocityY);
+	endTimer("Project");
 
+	startTimer();
 	// Self advection
 	std::swap(this->velocityX, this->prevVelocityX);
 	std::swap(this->velocityY, this->prevVelocityY);
 	advect(Direction::HORIZONTAL, this->velocityX, this->prevVelocityX, this->prevVelocityX, this->prevVelocityY, dt);
 	advect(Direction::VERTICAL, this->velocityY, this->prevVelocityY, this->prevVelocityX, this->prevVelocityY, dt);
+	endTimer("Advect");
 
+	startTimer();
 	// Conserve mass of the velocity field
 	project(iterations, this->velocityX, this->velocityY, this->prevVelocityX, this->prevVelocityY);
+	endTimer("Project");
 
+	startTimer();
 	// Diffuse density
 	std::swap(this->density, this->prevDensity);
 	diffuse(Direction::NONE, iterations, this->density, this->prevDensity, dt, diffusionRate);
+	endTimer("Diffuse");
 
+	startTimer();
 	// Advect density
 	std::swap(this->density, this->prevDensity);
 	advect(Direction::NONE, this->density, this->prevDensity, this->velocityX, this->velocityY, dt);
+	endTimer("Advect");
 
 	// Fade the density to avoid filling the volume
 	fadeDensity(dt, fadeRate);
@@ -87,6 +99,18 @@ void FluidGrid::addDensity(int x, int y, float amount, float dt) {
 
 // Linear backtrace
 void FluidGrid::advect(Direction direction, float *arr, float *prevArr, float *velX, float *velY, float dt) {
+	threadPool.computeOnThreads(
+		size, 
+		[&](int startIndex, int endIndex) {
+			advectLoop(startIndex, endIndex, arr, prevArr, velX, velY, dt); 
+		}
+	);
+
+	setBounds(direction, arr);
+}
+
+void FluidGrid::advectLoop(int startIndex, int endIndex, float *arr, float *prevArr, float *velX, float *velY, float dt)
+{
 	float scaling = dt * this->size;
 	float maxClamp = this->size - 1.5f;
 
@@ -97,9 +121,9 @@ void FluidGrid::advect(Direction direction, float *arr, float *prevArr, float *v
 	__m256 _one = _mm256_set1_ps(1.0f);
 	__m256i _size = _mm256_set1_epi32(this->size);
 
-	for (int y = 1; y < size-1; y++) {
+	for (int y = 1; y < size - 1; y++) {
 		int x = 1;
-		
+
 		__m256 _y = _mm256_set1_ps((float)y);
 		for (; x < size - 9; x += 8) {
 			// Increment x by 0 to 7 since we are computing 8 iterations of x at once
@@ -159,10 +183,10 @@ void FluidGrid::advect(Direction direction, float *arr, float *prevArr, float *v
 			_mm256_storeu_ps(&arr[x + y * this->size], _result);
 		}
 
-		for ( ; x < size-1; x++) {
+		for (; x < size - 1; x++) {
 			// Subtract velocity from current cell to get previous cell indices
-			float prevX = x - velX[x+y*size] * scaling;
-			float prevY = y - velY[x+y*size] * scaling;
+			float prevX = x - velX[x + y * size] * scaling;
+			float prevY = y - velY[x + y * size] * scaling;
 
 			// Clamp previous cells in case they are outside of the domain
 			prevX = std::clamp(prevX, 0.5f, maxClamp);
@@ -188,14 +212,12 @@ void FluidGrid::advect(Direction direction, float *arr, float *prevArr, float *v
 
 			float prevYDecimals = prevY - prevYInt;
 			float prevYRemainingDecimals = 1.0f - prevYDecimals;
-			
+
 			arr[x + y * this->size] =
-				prevXRemainingDecimals * (prevYRemainingDecimals * prevArr[prevXInt	    + prevYInt * this->size] + prevYDecimals * prevArr[prevXInt	   + (prevYInt+1) * this->size]) +
-				prevXDecimals		   * (prevYRemainingDecimals * prevArr[(prevXInt+1) + prevYInt * this->size] + prevYDecimals * prevArr[(prevXInt+1) + (prevYInt+1) * this->size]);
+				prevXRemainingDecimals * (prevYRemainingDecimals * prevArr[prevXInt + prevYInt * this->size] + prevYDecimals * prevArr[prevXInt + (prevYInt + 1) * this->size]) +
+				prevXDecimals * (prevYRemainingDecimals * prevArr[(prevXInt + 1) + prevYInt * this->size] + prevYDecimals * prevArr[(prevXInt + 1) + (prevYInt + 1) * this->size]);
 		}
 	}
-
-	setBounds(direction, arr);
 }
 
 // Hodge decomposition
@@ -437,9 +459,10 @@ void FluidGrid::checkPrint() {
 	microsSinceLastPrint += printMicroSeconds.count();
 	if (microsSinceLastPrint > 1000000.0) {
 		for (std::map<std::string, double>::iterator iterator = timers.begin(); iterator != timers.end(); iterator++) {
-			std::cout << iterator->first << ": " << iterator->second / runs / 20 << " microseconds" << std::endl;
+			std::cout << iterator->first << ": " << iterator->second / runs << " microseconds\n";
 			iterator->second = 0;
 		}
+		std::cout << std::endl;
 		microsSinceLastPrint = 0;
 		runs = 0;
 	}
