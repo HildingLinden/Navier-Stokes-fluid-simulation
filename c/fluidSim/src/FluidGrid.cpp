@@ -200,17 +200,36 @@ void FluidGrid::advect(Direction direction, float *arr, float *prevArr, float *v
 
 // Hodge decomposition
 void FluidGrid::project(int iterations, float *velX, float *velY, float *p, float *div) {
+	/* 
+	Compute height field (Poisson-pressure equation on threads
+	*/
+	threadPool.computeOnThreads(size, [&](int startIndex, int endIndex) {projectHeightMapLoop(startIndex, endIndex, velX, velY, p, div); });
+
+	setBounds(Direction::NONE, div);
+	setBounds(Direction::NONE, p);
+	linearSolve(Direction::NONE, iterations, p, div, 1, 4);
+
+	/*
+	Compute mass conserving field (Velocity field - Height field) on threads
+	*/
+	threadPool.computeOnThreads(size, [&](int startIndex, int endIndex) {projectMassConservLoop(startIndex, endIndex, p, div); });
+
+	setBounds(Direction::HORIZONTAL, velocityX);
+	setBounds(Direction::VERTICAL, velocityY);
+}
+
+void FluidGrid::projectHeightMapLoop(int startIndex, int endIndex, float *velX, float *velY, float *p, float *div)
+{
 	float sizeReciprocal = 1.0f / this->size;
 
 	__m256 _sizeReciprocal = _mm256_set1_ps(sizeReciprocal);
 	__m256 _minusHalf = _mm256_set1_ps(-0.5f);
 	__m256 _zero = _mm256_setzero_ps();
 
-	// Compute height field (Poisson-pressure equation)
-	for (int y = 1; y < this->size - 1; y++) {
+	for (int y = startIndex; y < endIndex; y++) {
 		int x = 1;
 
-		for ( ; x < this->size - 9; x+=8) {
+		for (; x < this->size - 9; x += 8) {
 			/*
 			x = x[left] - x[right]
 			y = y[up] - y[down]
@@ -242,26 +261,25 @@ void FluidGrid::project(int iterations, float *velX, float *velY, float *p, floa
 			p[x + y * size] = 0;
 		}
 	}
+}
 
-	setBounds(Direction::NONE, div);
-	setBounds(Direction::NONE, p);
-	linearSolve(Direction::NONE, iterations, p, div, 1, 4);
-
-	// Compute mass conserving field (Velocity field - Height field)
+void FluidGrid::projectMassConservLoop(int startIndex, int endIndex, float *p, float *div)
+{
 	__m256 _size = _mm256_set1_ps((float)this->size);
+	__m256 _minusHalf = _mm256_set1_ps(-0.5f);
 
-	for (int y = 1; y < this->size - 1; y++) {
+	for (int y = startIndex; y < endIndex; y++) {
 		int x = 1;
 
-		for ( ; x < this->size - 9; x+=8) {
+		for (; x < this->size - 9; x += 8) {
 			__m256 _val, _oldVal;
 			/*
 			val = p[left] - p[right];
 			val *= size;
 			oldVal += -0.5f * val;
 			*/
-			__m256 _left  = _mm256_loadu_ps(&p[(x - 1) + y * this->size]);
-			__m256 _right = _mm256_loadu_ps(&p[(x + 1) + y * this->size]);			
+			__m256 _left = _mm256_loadu_ps(&p[(x - 1) + y * this->size]);
+			__m256 _right = _mm256_loadu_ps(&p[(x + 1) + y * this->size]);
 			_val = _mm256_sub_ps(_left, _right);
 			_val = _mm256_mul_ps(_val, _size);
 			_oldVal = _mm256_loadu_ps(&velocityX[x + y * this->size]);
@@ -288,9 +306,6 @@ void FluidGrid::project(int iterations, float *velX, float *velY, float *p, floa
 			velocityY[x + y * this->size] -= 0.5f * (p[x + (y - 1) * this->size] - p[x + (y + 1) * this->size]) * this->size;
 		}
 	}
-
-	setBounds(Direction::HORIZONTAL, velocityX);
-	setBounds(Direction::VERTICAL, velocityY);
 }
 
 // Mass conserving
@@ -315,7 +330,7 @@ void FluidGrid::linearSolve(Direction direction, int iterations, float *arr, flo
 		threadPool.computeOnThreads(
 			size,
 			[&](int startIndex, int endIndex) {
-				linearSolveLoop(startIndex, endIndex, direction, iterations, arr, prevArr, neighborDiffusion,  _neighborDiffusion, reciprocalScaling, _reciprocalScaling);
+				linearSolveLoop(startIndex, endIndex, arr, prevArr, neighborDiffusion,  _neighborDiffusion, reciprocalScaling, _reciprocalScaling);
 			}
 		);
 
@@ -326,7 +341,7 @@ void FluidGrid::linearSolve(Direction direction, int iterations, float *arr, flo
 	}
 }
 
-void FluidGrid::linearSolveLoop(int startIndex, int endIndex, Direction direction, int iterations, float *arr, float *prevArr, float neighborDiffusion, __m256 _neighborDiffusion, float reciprocalScaling, __m256 _reciprocalScaling)
+void FluidGrid::linearSolveLoop(int startIndex, int endIndex, float *arr, float *prevArr, float neighborDiffusion, __m256 _neighborDiffusion, float reciprocalScaling, __m256 _reciprocalScaling)
 {
 	for (int y = startIndex; y < endIndex; y++) {
 		int x = 1;

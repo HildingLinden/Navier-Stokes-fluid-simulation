@@ -35,9 +35,11 @@ private:
 
 	void	advect(Direction direction, float *arr, float *prevArr, float *velocityX, float *velocityY, float dt);
 	void	project(int iterations, float *velocityX, float *velocityY, float *p, float *div);
+	void	projectHeightMapLoop(int startIndex, int endIndex, float *velX, float *velY, float *p, float *div);
+	void	projectMassConservLoop(int startIndex, int endIndex, float *p, float *div);
 	void	diffuse(Direction direction, int iterations, float *arr, float *prevArr, float dt, double diffusion);
 	void	linearSolve(Direction direction, int iterations, float *arr, float *prevArr, float neighborDiffusion, float scaling);
-	void	linearSolveLoop(int startIndex, int endIndex, Direction direction, int iterations, float *arr, float *prevArr, float neighborDiffusion, __m256 _neighborDiffusion, float reciprocalScaling, __m256 _reciprocalScaling);
+	void	linearSolveLoop(int startIndex, int endIndex, float *arr, float *prevArr, float neighborDiffusion, __m256 _neighborDiffusion, float reciprocalScaling, __m256 _reciprocalScaling);
 	void	setBounds(Direction direction, float *arr);
 	void	fadeDensity(float dt, double fadeRate);
 

@@ -22,7 +22,7 @@ public:
 };
 
 class ThreadPool {
-	Worker *workers; // Has to be array since mutexes are not allowed to be copied or moved
+	Worker *workers = nullptr; // Has to be array since mutexes are not allowed to be copied or moved
 	int numWorkers = 0;
 
 public:
