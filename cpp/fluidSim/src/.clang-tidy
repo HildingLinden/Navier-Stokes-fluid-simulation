@@ -1,0 +1,12 @@
+---
+Checks:          '*,-google-runtime-references,-hicpp-use-auto,-modernize-use-trailing-return-type'
+WarningsAsErrors: ''
+HeaderFilterRegex: ''
+AnalyzeTemporaryDtors: false
+FormatStyle:     none
+User:            Hilding
+CheckOptions:
+  - key:             modernize-use-auto.MinTypeNameLength
+    value:           999
+...
+

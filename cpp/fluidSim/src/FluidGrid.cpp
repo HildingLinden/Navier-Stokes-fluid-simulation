@@ -1,26 +1,23 @@
 #include "FluidGrid.h"
-#include <iostream>
+
 #include <algorithm>
 #include <chrono>
-#include <immintrin.h>
+#include <iostream>
+
 
 FluidGrid::FluidGrid(int size) {
 	printT0 = std::chrono::steady_clock::now();
 
-	density = (float *)calloc(size * size, sizeof(float));
-	prevDensity = (float *)calloc(size * size, sizeof(float));
+	density.resize(size * size);
+	prevDensity.resize(size * size);
 
-	velocityX = (float *)calloc(size * size, sizeof(float));
-	prevVelocityX = (float *)calloc(size * size, sizeof(float));
+	velocityX.resize(size * size);
+	prevVelocityX.resize(size * size);
 
-	velocityY = (float *)calloc(size * size, sizeof(float));
-	prevVelocityY = (float *)calloc(size * size, sizeof(float));
+	velocityY.resize(size * size);
+	prevVelocityY.resize(size * size);
 
-	tmp = (float *)calloc(size * size, sizeof(float));
-
-	if (!(density && prevDensity && velocityX && prevVelocityX && velocityY && prevVelocityY)) {
-		throw std::runtime_error("Failed to allocate memory for FluidGrid\n");
-	}
+	tmp.resize(size * size);
 
 	this->size = size;
 
@@ -29,57 +26,45 @@ FluidGrid::FluidGrid(int size) {
 	threadPool.init(6);
 }
 
-FluidGrid::~FluidGrid() {
-	free(density);
-	free(prevDensity);
-	free(velocityX);
-	free(prevVelocityX);
-	free(velocityY);
-	free(prevVelocityY);
-	free(tmp);
-
-	// ThreadPool destructor is implicit called because it is stack allocated
-}
-
 void FluidGrid::step(float dt, int iterations, double diffusionRate, double viscosity, double fadeRate) {
 	startTimer();
 	// Diffuse X velocity
-	std::swap(this->velocityX, this->prevVelocityX);
-	diffuse(Direction::HORIZONTAL, iterations, this->velocityX, this->prevVelocityX, dt, viscosity);
+	diffuse(Direction::HORIZONTAL, iterations, velocityX, prevVelocityX, dt, viscosity);
 
 	// Diffuse Y velocity
-	std::swap(this->velocityY, this->prevVelocityY);
-	diffuse(Direction::VERTICAL, iterations, this->velocityY, this->prevVelocityY, dt, viscosity);
+	diffuse(Direction::VERTICAL, iterations, velocityY, prevVelocityY, dt, viscosity);
 	endTimer("Diffuse");
 
 	startTimer();
 	// Conserve mass of the velocity field
-	project(iterations, this->velocityX, this->velocityY, this->prevVelocityX, this->prevVelocityY);
+	project(iterations, prevVelocityX, prevVelocityY);
 	endTimer("Project");
 
 	startTimer();
 	// Self advection
-	std::swap(this->velocityX, this->prevVelocityX);
-	std::swap(this->velocityY, this->prevVelocityY);
-	advect(Direction::HORIZONTAL, this->velocityX, this->prevVelocityX, this->prevVelocityX, this->prevVelocityY, dt);
-	advect(Direction::VERTICAL, this->velocityY, this->prevVelocityY, this->prevVelocityX, this->prevVelocityY, dt);
+	std::swap(velocityX, prevVelocityX);
+	std::swap(velocityY, prevVelocityY);
+	advect(Direction::HORIZONTAL, velocityX, prevVelocityX, dt);
+	advect(Direction::VERTICAL, velocityY, prevVelocityY, dt);
 	endTimer("Advect");
 
 	startTimer();
 	// Conserve mass of the velocity field
-	project(iterations, this->velocityX, this->velocityY, this->prevVelocityX, this->prevVelocityY);
+	project(iterations, prevVelocityX, prevVelocityY);
 	endTimer("Project");
 
 	startTimer();
 	// Diffuse density
-	std::swap(this->density, this->prevDensity);
-	diffuse(Direction::NONE, iterations, this->density, this->prevDensity, dt, diffusionRate);
+	std::swap(density, prevDensity);
+	diffuse(Direction::NONE, iterations, density, prevDensity, dt, diffusionRate);
 	endTimer("Diffuse");
 
 	startTimer();
 	// Advect density
-	std::swap(this->density, this->prevDensity);
-	advect(Direction::NONE, this->density, this->prevDensity, this->velocityX, this->velocityY, dt);
+	std::swap(velocityX, prevVelocityX);
+	std::swap(velocityY, prevVelocityY);
+	std::swap(density, prevDensity);
+	advect(Direction::NONE, density, prevDensity, dt);
 	endTimer("Advect");
 
 	// Fade the density to avoid filling the volume
@@ -88,51 +73,50 @@ void FluidGrid::step(float dt, int iterations, double diffusionRate, double visc
 	checkPrint();
 }
 
-void FluidGrid::addVelocity(int x, int y, float amountX, float amountY, float dt) {
-	this->velocityX[x + y * this->size] += amountX * dt * this->size;
-	this->velocityY[x + y * this->size] += amountY * dt * this->size;
+void FluidGrid::addVelocity(int x, int y, float velocityXAmount, float velocityYAmount, float dt) {
+	prevVelocityX[x + y * size] += velocityXAmount * dt * static_cast<float>(size);
+	prevVelocityY[x + y * size] += velocityYAmount * dt * static_cast<float>(size);
 }
 
 void FluidGrid::addDensity(int x, int y, float amount, float dt) {
-	this->density[x + y * this->size] += amount * dt * this->size;
+	density[x + y * size] += amount * dt * static_cast<float>(size);
 }
 
 // Linear backtrace
-void FluidGrid::advect(Direction direction, float *arr, float *prevArr, float *velX, float *velY, float dt) {
+void FluidGrid::advect(Direction direction, std::vector<float> &arr, std::vector<float> &prevArr, float dt) {
 	threadPool.computeOnThreads(
-		size, 
+		size,
 		[&](int startIndex, int endIndex) {
-			advectLoop(startIndex, endIndex, arr, prevArr, velX, velY, dt); 
+			advectLoop(startIndex, endIndex, arr, prevArr, dt);
 		}
 	);
 
 	setBounds(direction, arr);
 }
 
-void FluidGrid::advectLoop(int startIndex, int endIndex, float *arr, float *prevArr, float *velX, float *velY, float dt)
-{
-	float scaling = dt * this->size;
-	float maxClamp = this->size - 1.5f;
+void FluidGrid::advectLoop(int startIndex, int endIndex, std::vector<float> &arr, std::vector<float> &prevArr, float dt) {
+	float scaling = dt * static_cast<float>(size);
+	float maxClamp = static_cast<float>(size) - 1.5F;
 
-	__m256 _xIncrements = _mm256_set_ps(7.0f, 6.0f, 5.0f, 4.0f, 3.0f, 2.0f, 1.0f, 0.0f);
+	__m256 _xIncrements = _mm256_set_ps(7.0F, 6.0F, 5.0F, 4.0F, 3.0F, 2.0F, 1.0F, 0.0F);
 	__m256 _scaling = _mm256_set1_ps(scaling);
 	__m256 _maxClamp = _mm256_set1_ps(maxClamp);
-	__m256 _minClamp = _mm256_set1_ps(0.5f);
-	__m256 _one = _mm256_set1_ps(1.0f);
-	__m256i _size = _mm256_set1_epi32(this->size);
+	__m256 _minClamp = _mm256_set1_ps(0.5F);
+	__m256 _one = _mm256_set1_ps(1.0F);
+	__m256i _size = _mm256_set1_epi32(size);
 
-	for (int y = 1; y < size - 1; y++) {
+	for (int y = startIndex; y < endIndex; y++) {
 		int x = 1;
 
-		__m256 _y = _mm256_set1_ps((float)y);
+		__m256 _y = _mm256_set1_ps(static_cast<float>(y));
 		for (; x < size - 9; x += 8) {
 			// Increment x by 0 to 7 since we are computing 8 iterations of x at once
-			__m256 _x = _mm256_set1_ps((float)x);
+			__m256 _x = _mm256_set1_ps(static_cast<float>(x));
 			_x = _mm256_add_ps(_x, _xIncrements);
 
 			// Subtract the current scaled velocity from y and incremented x
-			__m256 _prevX = _mm256_load_ps(&velX[x + y * size]);
-			__m256 _prevY = _mm256_load_ps(&velY[x + y * size]);
+			__m256 _prevX = _mm256_load_ps(&prevVelocityX[x + y * size]);
+			__m256 _prevY = _mm256_load_ps(&prevVelocityY[x + y * size]);
 
 			_prevX = _mm256_mul_ps(_prevX, _scaling);
 			_prevY = _mm256_mul_ps(_prevY, _scaling);
@@ -166,8 +150,8 @@ void FluidGrid::advectLoop(int startIndex, int endIndex, float *arr, float *prev
 			// Get the middle, right, down and downRight cells by changing the base address of the gather
 			__m256 _middle = _mm256_i32gather_ps(&prevArr[0], _prevIndices, sizeof(float));
 			__m256 _right = _mm256_i32gather_ps(&prevArr[1], _prevIndices, sizeof(float));
-			__m256 _down = _mm256_i32gather_ps(&prevArr[this->size], _prevIndices, sizeof(float));
-			__m256 _downRight = _mm256_i32gather_ps(&prevArr[this->size + 1], _prevIndices, sizeof(float));
+			__m256 _down = _mm256_i32gather_ps(&prevArr[size], _prevIndices, sizeof(float));
+			__m256 _downRight = _mm256_i32gather_ps(&prevArr[size + 1], _prevIndices, sizeof(float));
 
 			// Do the linear interpolation (See below for explanation)
 			__m256 _middleScaling = _mm256_mul_ps(_prevXRemainingDecimals, _prevYRemainingDecimals);
@@ -180,24 +164,24 @@ void FluidGrid::advectLoop(int startIndex, int endIndex, float *arr, float *prev
 			_result = _mm256_fmadd_ps(_right, _rightScaling, _result);
 			_result = _mm256_fmadd_ps(_downRight, _downRightScaling, _result);
 
-			_mm256_storeu_ps(&arr[x + y * this->size], _result);
+			_mm256_storeu_ps(&arr[x + y * size], _result);
 		}
 
 		for (; x < size - 1; x++) {
 			// Subtract velocity from current cell to get previous cell indices
-			float prevX = x - velX[x + y * size] * scaling;
-			float prevY = y - velY[x + y * size] * scaling;
+			float prevX = static_cast<float>(x) - prevVelocityX[x + y * size] * scaling;
+			float prevY = static_cast<float>(y) - prevVelocityY[x + y * size] * scaling;
 
 			// Clamp previous cells in case they are outside of the domain
-			prevX = std::clamp(prevX, 0.5f, maxClamp);
-			prevY = std::clamp(prevY, 0.5f, maxClamp);
+			prevX = std::clamp(prevX, 0.5F, maxClamp);
+			prevY = std::clamp(prevY, 0.5F, maxClamp);
 
 			/*
 			Casting the index of the previous cell to integers truncates the index which means that
 			the index is moved up and to the left
 			*/
-			int prevXInt = (int)prevX;
-			int prevYInt = (int)prevY;
+			int prevXInt = static_cast<int>(prevX);
+			int prevYInt = static_cast<int>(prevY);
 
 			/*
 			To interpolate we then:
@@ -207,51 +191,50 @@ void FluidGrid::advectLoop(int startIndex, int endIndex, float *arr, float *prev
 				multiply the remaining decimals of x and y with the current cell
 			and add them all together
 			*/
-			float prevXDecimals = prevX - prevXInt;
-			float prevXRemainingDecimals = 1.0f - prevXDecimals;
+			float prevXDecimals = prevX - static_cast<float>(prevXInt);
+			float prevXRemainingDecimals = 1.0F - prevXDecimals;
 
-			float prevYDecimals = prevY - prevYInt;
-			float prevYRemainingDecimals = 1.0f - prevYDecimals;
+			float prevYDecimals = prevY - static_cast<float>(prevYInt);
+			float prevYRemainingDecimals = 1.0F - prevYDecimals;
 
-			arr[x + y * this->size] =
-				prevXRemainingDecimals * (prevYRemainingDecimals * prevArr[prevXInt + prevYInt * this->size] + prevYDecimals * prevArr[prevXInt + (prevYInt + 1) * this->size]) +
-				prevXDecimals * (prevYRemainingDecimals * prevArr[(prevXInt + 1) + prevYInt * this->size] + prevYDecimals * prevArr[(prevXInt + 1) + (prevYInt + 1) * this->size]);
+			arr[x + y * size] =
+				prevXRemainingDecimals * (prevYRemainingDecimals * prevArr[prevXInt + prevYInt * size] + prevYDecimals * prevArr[prevXInt + (prevYInt + 1) * size]) +
+				prevXDecimals * (prevYRemainingDecimals * prevArr[(prevXInt + 1) + prevYInt * size] + prevYDecimals * prevArr[(prevXInt + 1) + (prevYInt + 1) * size]);
 		}
 	}
 }
 
 // Hodge decomposition
-void FluidGrid::project(int iterations, float *velX, float *velY, float *p, float *div) {
+void FluidGrid::project(int iterations, std::vector<float> &divergence, std::vector<float> &pressure) {
 	/* 
 	Compute height field (Poisson-pressure equation on threads
 	*/
-	threadPool.computeOnThreads(size, [&](int startIndex, int endIndex) {projectHeightMapLoop(startIndex, endIndex, velX, velY, p, div); });
+	threadPool.computeOnThreads(size, [&](int startIndex, int endIndex) {projectDivergenceLoop(startIndex, endIndex, divergence, pressure); });
 
-	setBounds(Direction::NONE, div);
-	setBounds(Direction::NONE, p);
-	linearSolve(Direction::NONE, iterations, p, div, 1, 4);
+	setBounds(Direction::NONE, divergence);
+	setBounds(Direction::NONE, pressure);
+	linearSolve(Direction::NONE, iterations, pressure, divergence, 1, 4);
 
 	/*
 	Compute mass conserving field (Velocity field - Height field) on threads
 	*/
-	threadPool.computeOnThreads(size, [&](int startIndex, int endIndex) {projectMassConservLoop(startIndex, endIndex, p, div); });
+	threadPool.computeOnThreads(size, [&](int startIndex, int endIndex) {projectGradientSubtractLoop(startIndex, endIndex, pressure); });
 
 	setBounds(Direction::HORIZONTAL, velocityX);
 	setBounds(Direction::VERTICAL, velocityY);
 }
 
-void FluidGrid::projectHeightMapLoop(int startIndex, int endIndex, float *velX, float *velY, float *p, float *div)
-{
-	float sizeReciprocal = 1.0f / this->size;
+void FluidGrid::projectDivergenceLoop(int startIndex, int endIndex, std::vector<float> &divergence, std::vector<float> &pressure) {
+	float sizeReciprocal = 1.0F / static_cast<float>(size);
 
 	__m256 _sizeReciprocal = _mm256_set1_ps(sizeReciprocal);
-	__m256 _minusHalf = _mm256_set1_ps(-0.5f);
+	__m256 _minusHalf = _mm256_set1_ps(-0.5F);
 	__m256 _zero = _mm256_setzero_ps();
 
 	for (int y = startIndex; y < endIndex; y++) {
 		int x = 1;
 
-		for (; x < this->size - 9; x += 8) {
+		for (; x < size - 9; x += 8) {
 			/*
 			x = x[left] - x[right]
 			y = y[up] - y[down]
@@ -259,102 +242,97 @@ void FluidGrid::projectHeightMapLoop(int startIndex, int endIndex, float *velX, 
 			cell *= -0.5
 			cell *= sizeReciprocal
 			*/
-			__m256 _up = _mm256_loadu_ps(&velY[x + (y - 1) * this->size]);
-			__m256 _down = _mm256_loadu_ps(&velY[x + (y + 1) * this->size]);
-			__m256 _left = _mm256_loadu_ps(&velX[(x - 1) + y * this->size]);
-			__m256 _right = _mm256_loadu_ps(&velX[(x + 1) + y * this->size]);
+			__m256 _up = _mm256_loadu_ps(&velocityY[x + (y - 1) * size]);
+			__m256 _down = _mm256_loadu_ps(&velocityY[x + (y + 1) * size]);
+			__m256 _left = _mm256_loadu_ps(&velocityX[(x - 1) + y * size]);
+			__m256 _right = _mm256_loadu_ps(&velocityX[(x + 1) + y * size]);
 
 			__m256 _x = _mm256_sub_ps(_left, _right);
 			__m256 _y = _mm256_sub_ps(_up, _down);
 			__m256 _cell = _mm256_add_ps(_x, _y);
 			_cell = _mm256_mul_ps(_cell, _minusHalf);
 			_cell = _mm256_mul_ps(_cell, _sizeReciprocal);
-			_mm256_storeu_ps(&div[x + y * size], _cell);
-			_mm256_storeu_ps(&p[x + y * size], _zero);
+			_mm256_storeu_ps(&divergence[x + y * size], _cell);
+			_mm256_storeu_ps(&pressure[x + y * size], _zero);
 		}
 
 		// Take care of rest of the cells if x-2 is not evenly divisible by 8
-		for (; x < this->size - 1; x++) {
-			div[x + y * size] =
-				-0.5f * (
-					velX[(x - 1) + y * this->size] - velX[(x + 1) + y * this->size] +
-					velY[x + (y - 1) * this->size] - velY[x + (y + 1) * this->size]
-					) * sizeReciprocal;
-			p[x + y * size] = 0;
+		for (; x < size - 1; x++) {
+			divergence[x + y * size] =
+				-0.5F * (
+					velocityX[(x - 1) + y * size] - velocityX[(x + 1) + y * size] +
+					velocityY[x + (y - 1) * size] - velocityY[x + (y + 1) * size])
+				* sizeReciprocal;
+			pressure[x + y * size] = 0;
 		}
 	}
 }
 
-void FluidGrid::projectMassConservLoop(int startIndex, int endIndex, float *p, float *div)
-{
-	__m256 _size = _mm256_set1_ps((float)this->size);
-	__m256 _minusHalf = _mm256_set1_ps(-0.5f);
+void FluidGrid::projectGradientSubtractLoop(int startIndex, int endIndex, std::vector<float> &pressure) {
+	__m256 _size = _mm256_set1_ps(static_cast<float>(size));
+	__m256 _minusHalf = _mm256_set1_ps(-0.5F);
 
 	for (int y = startIndex; y < endIndex; y++) {
 		int x = 1;
 
-		for (; x < this->size - 9; x += 8) {
+		for (; x < size - 9; x += 8) {
 			__m256 _val, _oldVal;
 			/*
 			val = p[left] - p[right];
 			val *= size;
-			oldVal += -0.5f * val;
+			oldVal += -0.5F * val;
 			*/
-			__m256 _left = _mm256_loadu_ps(&p[(x - 1) + y * this->size]);
-			__m256 _right = _mm256_loadu_ps(&p[(x + 1) + y * this->size]);
+			__m256 _left = _mm256_loadu_ps(&pressure[(x - 1) + y * size]);
+			__m256 _right = _mm256_loadu_ps(&pressure[(x + 1) + y * size]);
 			_val = _mm256_sub_ps(_left, _right);
 			_val = _mm256_mul_ps(_val, _size);
-			_oldVal = _mm256_loadu_ps(&velocityX[x + y * this->size]);
+			_oldVal = _mm256_loadu_ps(&velocityX[x + y * size]);
 			_oldVal = _mm256_fmadd_ps(_val, _minusHalf, _oldVal);
-			_mm256_storeu_ps(&velocityX[x + y * this->size], _oldVal);
+			_mm256_storeu_ps(&velocityX[x + y * size], _oldVal);
 
 			/*
 			val = p[up] - p[down];
 			val *= size;
-			oldVal += -0.5f * val;
+			oldVal += -0.5F * val;
 			*/
-			__m256 _up = _mm256_loadu_ps(&p[x + (y - 1) * this->size]);
-			__m256 _down = _mm256_loadu_ps(&p[x + (y + 1) * this->size]);
+			__m256 _up = _mm256_loadu_ps(&pressure[x + (y - 1) * size]);
+			__m256 _down = _mm256_loadu_ps(&pressure[x + (y + 1) * size]);
 			_val = _mm256_sub_ps(_up, _down);
 			_val = _mm256_mul_ps(_val, _size);
-			_oldVal = _mm256_loadu_ps(&velocityY[x + y * this->size]);
+			_oldVal = _mm256_loadu_ps(&velocityY[x + y * size]);
 			_oldVal = _mm256_fmadd_ps(_val, _minusHalf, _oldVal);
-			_mm256_storeu_ps(&velocityY[x + y * this->size], _oldVal);
+			_mm256_storeu_ps(&velocityY[x + y * size], _oldVal);
 		}
 
 		// Take care of rest of the cells if x-2 is not evenly divisible by 8
-		for (; x < this->size - 1; x++) {
-			velocityX[x + y * this->size] -= 0.5f * (p[(x - 1) + y * this->size] - p[(x + 1) + y * this->size]) * this->size;
-			velocityY[x + y * this->size] -= 0.5f * (p[x + (y - 1) * this->size] - p[x + (y + 1) * this->size]) * this->size;
+		for (; x < size - 1; x++) {
+			velocityX[x + y * size] -= 0.5F * (pressure[(x - 1) + y * size] - pressure[(x + 1) + y * size]) * static_cast<float>(size);
+			velocityY[x + y * size] -= 0.5F * (pressure[x + (y - 1) * size] - pressure[x + (y + 1) * size]) * static_cast<float>(size);
 		}
 	}
 }
 
 // Mass conserving
-void FluidGrid::diffuse(Direction direction, int iterations, float *arr, float *prevArr, float dt, double diffusion) {
-	float neighborDiffusion = (float)(diffusion * dt * this->size * this->size);
+void FluidGrid::diffuse(Direction direction, int iterations, std::vector<float> &arr, std::vector<float> &prevArr, float dt, double diffusion) {
+	float neighborDiffusion = static_cast<float>(diffusion * dt * size * size);
 	float scaling = 1 + 4 * neighborDiffusion;
 
 	linearSolve(direction, iterations, arr, prevArr, neighborDiffusion, scaling);
 }
 
 // Using Jacobi relaxation
-void FluidGrid::linearSolve(Direction direction, int iterations, float *arr, float *prevArr, float neighborDiffusion, float scaling) {
-	float reciprocalScaling = 1.0f / scaling;
+void FluidGrid::linearSolve(Direction direction, int iterations, std::vector<float> &arr, std::vector<float> &prevArr, float neighborDiffusion, float scaling) {
+	float reciprocalScaling = 1.0F / scaling;
 	__m256 _reciprocalScaling = _mm256_set1_ps(reciprocalScaling);
 	__m256 _neighborDiffusion = _mm256_set1_ps(neighborDiffusion);
 
 	for (int iteration = 0; iteration < iterations; iteration++) {
-		
 		/*
 		Run on threads
 		*/
-		threadPool.computeOnThreads(
-			size,
-			[&](int startIndex, int endIndex) {
+		threadPool.computeOnThreads(size, [&](int startIndex, int endIndex) {
 				linearSolveLoop(startIndex, endIndex, arr, prevArr, neighborDiffusion,  _neighborDiffusion, reciprocalScaling, _reciprocalScaling);
-			}
-		);
+		});
 
 		std::swap(tmp, arr);
 
@@ -363,8 +341,7 @@ void FluidGrid::linearSolve(Direction direction, int iterations, float *arr, flo
 	}
 }
 
-void FluidGrid::linearSolveLoop(int startIndex, int endIndex, float *arr, float *prevArr, float neighborDiffusion, __m256 _neighborDiffusion, float reciprocalScaling, __m256 _reciprocalScaling)
-{
+void FluidGrid::linearSolveLoop(int startIndex, int endIndex, std::vector<float> &arr, std::vector<float> &prevArr, float neighborDiffusion, __m256 _neighborDiffusion, float reciprocalScaling, __m256 _reciprocalScaling) {
 	for (int y = startIndex; y < endIndex; y++) {
 		int x = 1;
 
@@ -399,17 +376,16 @@ void FluidGrid::linearSolveLoop(int startIndex, int endIndex, float *arr, float 
 				neighborDiffusion * (
 					arr[x + ((y - 1) * size)] +
 					arr[x + ((y + 1) * size)] +
-					arr[(x - 1) + (y * this->size)] +
-					arr[(x + 1) + (y * this->size)]
-					);
-			float previous = prevArr[x + y * this->size];
-			tmp[x + y * this->size] = (previous + neighbors) * reciprocalScaling;
+					arr[(x - 1) + (y * size)] +
+					arr[(x + 1) + (y * size)]);
+			float previous = prevArr[x + y * size];
+			tmp[x + y * size] = (previous + neighbors) * reciprocalScaling;
 		}
 	}
 }
 
-void FluidGrid::setBounds(Direction direction, float *arr) {
-	for (int i = 1; i < this->size-1; i++) {
+void FluidGrid::setBounds(Direction direction, std::vector<float> &arr) const {
+	for (int i = 1; i < size-1; i++) {
 		// Left and right edge get the reverse velocity of the neighbor if in X direction
 		arr[0		 + i * size] = (direction == Direction::HORIZONTAL) ? -arr[1		  + i * size] : arr[1		 + i * size];
 		arr[(size-1) + i * size] = (direction == Direction::HORIZONTAL) ? -arr[(size-2) + i * size] : arr[(size-2) + i * size];
@@ -420,17 +396,17 @@ void FluidGrid::setBounds(Direction direction, float *arr) {
 	}
 
 	// The corners get the average values of their neighbors
-	arr[0		 + 0		* size] = 0.5f * (arr[1		  + 0		 * size] + arr[0		+ 1		   * size]);
-	arr[(size-1) + 0		* size] = 0.5f * (arr[(size-2) + 0		 * size] + arr[(size-1) + 1		   * size]);
-	arr[0		 + (size-1)	* size] = 0.5f * (arr[0		  + (size-2) * size] + arr[1		+ (size-1) * size]);
-	arr[(size-1) + (size-1) * size] = 0.5f * (arr[(size-2) + (size-1) * size] + arr[(size-1) + (size-2) * size]);
+	arr[0		 + 0		* size] = 0.5F * (arr[1		  + 0		 * size] + arr[0		+ 1		   * size]);
+	arr[(size-1) + 0		* size] = 0.5F * (arr[(size-2) + 0		 * size] + arr[(size-1) + 1		   * size]);
+	arr[0		 + (size-1)	* size] = 0.5F * (arr[0		  + (size-2) * size] + arr[1		+ (size-1) * size]);
+	arr[(size-1) + (size-1) * size] = 0.5F * (arr[(size-2) + (size-1) * size] + arr[(size-1) + (size-2) * size]);
 }
 
 void FluidGrid::fadeDensity(float dt, double fadeRate) {
-	double scaledFadeRate = 1 - dt * fadeRate * this->size;
-	for (int y = 1; y < this->size - 1; y++) {
-		for (int x = 1; x < this->size - 1; x++) {
-			this->density[x + y * this->size] *= (float)scaledFadeRate;
+	double scaledFadeRate = 1 - dt * fadeRate * size;
+	for (int y = 1; y < size - 1; y++) {
+		for (int x = 1; x < size - 1; x++) {
+			density[x + y * size] = static_cast<float>(scaledFadeRate * density[x + y * size]);
 		}
 	}
 }
@@ -439,15 +415,14 @@ void FluidGrid::startTimer() {
 	timerT0 = std::chrono::steady_clock::now();
 }
 
-void FluidGrid::endTimer(std::string timerName) {
+void FluidGrid::endTimer(const std::string &timerName) {
 	auto t1 = std::chrono::steady_clock::now();
 	std::chrono::duration<double, std::micro> microSeconds = t1 - timerT0;
-	
-	std::map<std::string, double>::iterator iterator = timers.find(timerName);
+
+	auto iterator = timers.find(timerName);
 	if (iterator != timers.end()) {
 		iterator->second += microSeconds.count();
-	}
-	else {
+	} else {
 		timers.insert(std::pair<std::string, double>(timerName, microSeconds.count()));
 	}
 }
@@ -457,10 +432,11 @@ void FluidGrid::checkPrint() {
 	auto printT1 = std::chrono::steady_clock::now();
 	std::chrono::duration<double, std::micro> printMicroSeconds = printT1 - printT0;
 	microsSinceLastPrint += printMicroSeconds.count();
-	if (microsSinceLastPrint > 1000000.0) {
-		for (std::map<std::string, double>::iterator iterator = timers.begin(); iterator != timers.end(); iterator++) {
-			std::cout << iterator->first << ": " << iterator->second / runs << " microseconds\n";
-			iterator->second = 0;
+	const double ONE_SECOND_IN_MICROSECONDS = 1000000.0;
+	if (microsSinceLastPrint > ONE_SECOND_IN_MICROSECONDS) {
+		for (std::pair<const std::string, double> &timer : timers) {
+			std::cout << timer.first << ": " << timer.second / runs << " microseconds\n";
+			timer.second = 0;
 		}
 		std::cout << std::endl;
 		microsSinceLastPrint = 0;
@@ -470,6 +446,6 @@ void FluidGrid::checkPrint() {
 	printT0 = printT1;
 }
 
-float *FluidGrid::getDensity() {
-	return this->density;
+std::vector<float> &FluidGrid::getDensity() {
+	return density;
 }
