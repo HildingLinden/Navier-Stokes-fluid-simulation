@@ -5,7 +5,7 @@
 #include <iostream>
 
 
-FluidGrid::FluidGrid(int size) {
+FluidGrid::FluidGrid(const int size) {
 	printT0 = std::chrono::steady_clock::now();
 
 	density.resize(size * size);
@@ -21,9 +21,7 @@ FluidGrid::FluidGrid(int size) {
 
 	this->size = size;
 
-	// Optimal number of threads is 6 for quad-core with hyperthreading (6700k)
-	// except for resolutions under 200
-	threadPool.init(6);
+	threadPool.init(WORKER_THREADS);
 }
 
 void FluidGrid::step(float dt, int iterations, double diffusionRate, double viscosity, double fadeRate) {
@@ -95,21 +93,23 @@ void FluidGrid::advect(Direction direction, std::vector<float> &arr, std::vector
 }
 
 void FluidGrid::advectLoop(int startIndex, int endIndex, std::vector<float> &arr, std::vector<float> &prevArr, float dt) {
-	float scaling = dt * static_cast<float>(size);
-	float maxClamp = static_cast<float>(size) - 1.5F;
+	const float scaling = dt * static_cast<float>(size);
+	const float maxClamp = static_cast<float>(size) - 1.5F;
+	constexpr float minClamp = 0.5F;
 
-	__m256 _xIncrements = _mm256_set_ps(7.0F, 6.0F, 5.0F, 4.0F, 3.0F, 2.0F, 1.0F, 0.0F);
-	__m256 _scaling = _mm256_set1_ps(scaling);
-	__m256 _maxClamp = _mm256_set1_ps(maxClamp);
-	__m256 _minClamp = _mm256_set1_ps(0.5F);
-	__m256 _one = _mm256_set1_ps(1.0F);
-	__m256i _size = _mm256_set1_epi32(size);
+	const __m256 _xIncrements = _mm256_set_ps(7.0F, 6.0F, 5.0F, 4.0F, 3.0F, 2.0F, 1.0F, 0.0F);
+	const __m256 _scaling = _mm256_set1_ps(scaling);
+	const __m256 _maxClamp = _mm256_set1_ps(maxClamp);
+	const __m256 _minClamp = _mm256_set1_ps(0.5F);
+	const __m256 _one = _mm256_set1_ps(1.0F);
+	const __m256i _size = _mm256_set1_epi32(size);
 
 	for (int y = startIndex; y < endIndex; y++) {
 		int x = 1;
 
-		__m256 _y = _mm256_set1_ps(static_cast<float>(y));
-		for (; x < size - 9; x += 8) {
+		const __m256 _y = _mm256_set1_ps(static_cast<float>(y));
+
+		for (; x < size - (SIMD_STRIDE + 1); x += SIMD_STRIDE) {
 			// Increment x by 0 to 7 since we are computing 8 iterations of x at once
 			__m256 _x = _mm256_set1_ps(static_cast<float>(x));
 			_x = _mm256_add_ps(_x, _xIncrements);
@@ -131,33 +131,33 @@ void FluidGrid::advectLoop(int startIndex, int endIndex, std::vector<float> &arr
 
 			// Get the integer part and decimal part of the indices
 			// as well as 1 - decimal part
-			__m256 _prevXRound = _mm256_floor_ps(_prevX);
-			__m256 _prevYRound = _mm256_floor_ps(_prevY);
+			const __m256 _prevXRound = _mm256_floor_ps(_prevX);
+			const __m256 _prevYRound = _mm256_floor_ps(_prevY);
 
-			__m256i _prevXInt = _mm256_cvtps_epi32(_prevXRound);
-			__m256i _prevYInt = _mm256_cvtps_epi32(_prevYRound);
+			const __m256i _prevXInt = _mm256_cvtps_epi32(_prevXRound);
+			const __m256i _prevYInt = _mm256_cvtps_epi32(_prevYRound);
 
-			__m256 _prevXDecimals = _mm256_sub_ps(_prevX, _prevXRound);
-			__m256 _prevYDecimals = _mm256_sub_ps(_prevY, _prevYRound);
+			const __m256 _prevXDecimals = _mm256_sub_ps(_prevX, _prevXRound);
+			const __m256 _prevYDecimals = _mm256_sub_ps(_prevY, _prevYRound);
 
-			__m256 _prevXRemainingDecimals = _mm256_sub_ps(_one, _prevXDecimals);
-			__m256 _prevYRemainingDecimals = _mm256_sub_ps(_one, _prevYDecimals);
+			const __m256 _prevXRemainingDecimals = _mm256_sub_ps(_one, _prevXDecimals);
+			const __m256 _prevYRemainingDecimals = _mm256_sub_ps(_one, _prevYDecimals);
 
 			// Multiply y by size and add x to get the actual indices
 			__m256i _prevIndices = _mm256_mullo_epi32(_prevYInt, _size);
 			_prevIndices = _mm256_add_epi32(_prevIndices, _prevXInt);
 
 			// Get the middle, right, down and downRight cells by changing the base address of the gather
-			__m256 _middle = _mm256_i32gather_ps(&prevArr[0], _prevIndices, sizeof(float));
-			__m256 _right = _mm256_i32gather_ps(&prevArr[1], _prevIndices, sizeof(float));
-			__m256 _down = _mm256_i32gather_ps(&prevArr[size], _prevIndices, sizeof(float));
-			__m256 _downRight = _mm256_i32gather_ps(&prevArr[size + 1], _prevIndices, sizeof(float));
+			const __m256 _middle = _mm256_i32gather_ps(&prevArr[0], _prevIndices, sizeof(float));
+			const __m256 _right = _mm256_i32gather_ps(&prevArr[1], _prevIndices, sizeof(float));
+			const __m256 _down = _mm256_i32gather_ps(&prevArr[size], _prevIndices, sizeof(float));
+			const __m256 _downRight = _mm256_i32gather_ps(&prevArr[size + 1], _prevIndices, sizeof(float));
 
 			// Do the linear interpolation (See below for explanation)
-			__m256 _middleScaling = _mm256_mul_ps(_prevXRemainingDecimals, _prevYRemainingDecimals);
-			__m256 _downScaling = _mm256_mul_ps(_prevXRemainingDecimals, _prevYDecimals);
-			__m256 _rightScaling = _mm256_mul_ps(_prevXDecimals, _prevYRemainingDecimals);
-			__m256 _downRightScaling = _mm256_mul_ps(_prevXDecimals, _prevYDecimals);
+			const __m256 _middleScaling = _mm256_mul_ps(_prevXRemainingDecimals, _prevYRemainingDecimals);
+			const __m256 _downScaling = _mm256_mul_ps(_prevXRemainingDecimals, _prevYDecimals);
+			const __m256 _rightScaling = _mm256_mul_ps(_prevXDecimals, _prevYRemainingDecimals);
+			const __m256 _downRightScaling = _mm256_mul_ps(_prevXDecimals, _prevYDecimals);
 
 			__m256 _result = _mm256_mul_ps(_middle, _middleScaling);
 			_result = _mm256_fmadd_ps(_down, _downScaling, _result);
@@ -173,15 +173,15 @@ void FluidGrid::advectLoop(int startIndex, int endIndex, std::vector<float> &arr
 			float prevY = static_cast<float>(y) - prevVelocityY[x + y * size] * scaling;
 
 			// Clamp previous cells in case they are outside of the domain
-			prevX = std::clamp(prevX, 0.5F, maxClamp);
-			prevY = std::clamp(prevY, 0.5F, maxClamp);
+			prevX = std::clamp(prevX, minClamp, maxClamp);
+			prevY = std::clamp(prevY, minClamp, maxClamp);
 
 			/*
 			Casting the index of the previous cell to integers truncates the index which means that
 			the index is moved up and to the left
 			*/
-			int prevXInt = static_cast<int>(prevX);
-			int prevYInt = static_cast<int>(prevY);
+			const int prevXInt = static_cast<int>(prevX);
+			const int prevYInt = static_cast<int>(prevY);
 
 			/*
 			To interpolate we then:
@@ -227,14 +227,14 @@ void FluidGrid::project(int iterations, std::vector<float> &divergence, std::vec
 void FluidGrid::projectDivergenceLoop(int startIndex, int endIndex, std::vector<float> &divergence, std::vector<float> &pressure) {
 	float sizeReciprocal = 1.0F / static_cast<float>(size);
 
-	__m256 _sizeReciprocal = _mm256_set1_ps(sizeReciprocal);
-	__m256 _minusHalf = _mm256_set1_ps(-0.5F);
-	__m256 _zero = _mm256_setzero_ps();
+	const __m256 _sizeReciprocal = _mm256_set1_ps(sizeReciprocal);
+	const __m256 _minusHalf = _mm256_set1_ps(-0.5F);
+	const __m256 _zero = _mm256_setzero_ps();
 
 	for (int y = startIndex; y < endIndex; y++) {
 		int x = 1;
 
-		for (; x < size - 9; x += 8) {
+		for (; x < size - (SIMD_STRIDE + 1); x += SIMD_STRIDE) {
 			/*
 			x = x[left] - x[right]
 			y = y[up] - y[down]
@@ -242,13 +242,13 @@ void FluidGrid::projectDivergenceLoop(int startIndex, int endIndex, std::vector<
 			cell *= -0.5
 			cell *= sizeReciprocal
 			*/
-			__m256 _up = _mm256_loadu_ps(&velocityY[x + (y - 1) * size]);
-			__m256 _down = _mm256_loadu_ps(&velocityY[x + (y + 1) * size]);
-			__m256 _left = _mm256_loadu_ps(&velocityX[(x - 1) + y * size]);
-			__m256 _right = _mm256_loadu_ps(&velocityX[(x + 1) + y * size]);
+			const __m256 _up = _mm256_loadu_ps(&velocityY[x + (y - 1) * size]);
+			const __m256 _down = _mm256_loadu_ps(&velocityY[x + (y + 1) * size]);
+			const __m256 _left = _mm256_loadu_ps(&velocityX[(x - 1) + y * size]);
+			const __m256 _right = _mm256_loadu_ps(&velocityX[(x + 1) + y * size]);
 
-			__m256 _x = _mm256_sub_ps(_left, _right);
-			__m256 _y = _mm256_sub_ps(_up, _down);
+			const __m256 _x = _mm256_sub_ps(_left, _right);
+			const __m256 _y = _mm256_sub_ps(_up, _down);
 			__m256 _cell = _mm256_add_ps(_x, _y);
 			_cell = _mm256_mul_ps(_cell, _minusHalf);
 			_cell = _mm256_mul_ps(_cell, _sizeReciprocal);
@@ -256,10 +256,12 @@ void FluidGrid::projectDivergenceLoop(int startIndex, int endIndex, std::vector<
 			_mm256_storeu_ps(&pressure[x + y * size], _zero);
 		}
 
+		constexpr float neighborScaling = 0.5F;
+
 		// Take care of rest of the cells if x-2 is not evenly divisible by 8
 		for (; x < size - 1; x++) {
 			divergence[x + y * size] =
-				-0.5F * (
+				-neighborScaling * (
 					velocityX[(x - 1) + y * size] - velocityX[(x + 1) + y * size] +
 					velocityY[x + (y - 1) * size] - velocityY[x + (y + 1) * size])
 				* sizeReciprocal;
@@ -269,24 +271,23 @@ void FluidGrid::projectDivergenceLoop(int startIndex, int endIndex, std::vector<
 }
 
 void FluidGrid::projectGradientSubtractLoop(int startIndex, int endIndex, std::vector<float> &pressure) {
-	__m256 _size = _mm256_set1_ps(static_cast<float>(size));
-	__m256 _minusHalf = _mm256_set1_ps(-0.5F);
+	const __m256 _size = _mm256_set1_ps(static_cast<float>(size));
+	const __m256 _minusHalf = _mm256_set1_ps(-0.5F);
 
 	for (int y = startIndex; y < endIndex; y++) {
 		int x = 1;
 
-		for (; x < size - 9; x += 8) {
-			__m256 _val, _oldVal;
+		for (; x < size - (SIMD_STRIDE + 1); x += SIMD_STRIDE) {
 			/*
 			val = p[left] - p[right];
 			val *= size;
 			oldVal += -0.5F * val;
 			*/
-			__m256 _left = _mm256_loadu_ps(&pressure[(x - 1) + y * size]);
-			__m256 _right = _mm256_loadu_ps(&pressure[(x + 1) + y * size]);
-			_val = _mm256_sub_ps(_left, _right);
+			const __m256 _left = _mm256_loadu_ps(&pressure[(x - 1) + y * size]);
+			const __m256 _right = _mm256_loadu_ps(&pressure[(x + 1) + y * size]);
+			__m256 _val = _mm256_sub_ps(_left, _right);
 			_val = _mm256_mul_ps(_val, _size);
-			_oldVal = _mm256_loadu_ps(&velocityX[x + y * size]);
+			__m256 _oldVal = _mm256_loadu_ps(&velocityX[x + y * size]);
 			_oldVal = _mm256_fmadd_ps(_val, _minusHalf, _oldVal);
 			_mm256_storeu_ps(&velocityX[x + y * size], _oldVal);
 
@@ -295,8 +296,8 @@ void FluidGrid::projectGradientSubtractLoop(int startIndex, int endIndex, std::v
 			val *= size;
 			oldVal += -0.5F * val;
 			*/
-			__m256 _up = _mm256_loadu_ps(&pressure[x + (y - 1) * size]);
-			__m256 _down = _mm256_loadu_ps(&pressure[x + (y + 1) * size]);
+			const __m256 _up = _mm256_loadu_ps(&pressure[x + (y - 1) * size]);
+			const __m256 _down = _mm256_loadu_ps(&pressure[x + (y + 1) * size]);
 			_val = _mm256_sub_ps(_up, _down);
 			_val = _mm256_mul_ps(_val, _size);
 			_oldVal = _mm256_loadu_ps(&velocityY[x + y * size]);
@@ -304,27 +305,29 @@ void FluidGrid::projectGradientSubtractLoop(int startIndex, int endIndex, std::v
 			_mm256_storeu_ps(&velocityY[x + y * size], _oldVal);
 		}
 
-		// Take care of rest of the cells if x-2 is not evenly divisible by 8
+		constexpr float neighborScaling = 0.5F;
+
+		// Take care of rest of the cells if x-2 is not evenly divisible by SIMD_STRIDE
 		for (; x < size - 1; x++) {
-			velocityX[x + y * size] -= 0.5F * (pressure[(x - 1) + y * size] - pressure[(x + 1) + y * size]) * static_cast<float>(size);
-			velocityY[x + y * size] -= 0.5F * (pressure[x + (y - 1) * size] - pressure[x + (y + 1) * size]) * static_cast<float>(size);
+			velocityX[x + y * size] -= neighborScaling * (pressure[(x - 1) + y * size] - pressure[(x + 1) + y * size]) * static_cast<float>(size);
+			velocityY[x + y * size] -= neighborScaling * (pressure[x + (y - 1) * size] - pressure[x + (y + 1) * size]) * static_cast<float>(size);
 		}
 	}
 }
 
 // Mass conserving
 void FluidGrid::diffuse(Direction direction, int iterations, std::vector<float> &arr, std::vector<float> &prevArr, float dt, double diffusion) {
-	float neighborDiffusion = static_cast<float>(diffusion * dt * size * size);
-	float scaling = 1 + 4 * neighborDiffusion;
+	const float neighborDiffusion = static_cast<float>(diffusion * dt * size * size);
+	const float scaling = 1 + 4 * neighborDiffusion;
 
 	linearSolve(direction, iterations, arr, prevArr, neighborDiffusion, scaling);
 }
 
 // Using Jacobi relaxation
 void FluidGrid::linearSolve(Direction direction, int iterations, std::vector<float> &arr, std::vector<float> &prevArr, float neighborDiffusion, float scaling) {
-	float reciprocalScaling = 1.0F / scaling;
-	__m256 _reciprocalScaling = _mm256_set1_ps(reciprocalScaling);
-	__m256 _neighborDiffusion = _mm256_set1_ps(neighborDiffusion);
+	const float reciprocalScaling = 1.0F / scaling;
+	const __m256 _reciprocalScaling = _mm256_set1_ps(reciprocalScaling);
+	const __m256 _neighborDiffusion = _mm256_set1_ps(neighborDiffusion);
 
 	for (int iteration = 0; iteration < iterations; iteration++) {
 		/*
@@ -345,11 +348,11 @@ void FluidGrid::linearSolveLoop(int startIndex, int endIndex, std::vector<float>
 	for (int y = startIndex; y < endIndex; y++) {
 		int x = 1;
 
-		for (; x < size - 9; x += 8) {
-			__m256 _up = _mm256_loadu_ps(&arr[x + (y - 1) * size]);
-			__m256 _left = _mm256_loadu_ps(&arr[(x - 1) + y * size]);
-			__m256 _right = _mm256_loadu_ps(&arr[(x + 1) + y * size]);
-			__m256 _down = _mm256_loadu_ps(&arr[x + (y + 1) * size]);
+		for (; x < size -  (SIMD_STRIDE + 1); x += SIMD_STRIDE) {
+			const __m256 _up = _mm256_loadu_ps(&arr[x + (y - 1) * size]);
+			const __m256 _left = _mm256_loadu_ps(&arr[(x - 1) + y * size]);
+			const __m256 _right = _mm256_loadu_ps(&arr[(x + 1) + y * size]);
+			const __m256 _down = _mm256_loadu_ps(&arr[x + (y + 1) * size]);
 
 			/*
 			cell = previous;
@@ -370,7 +373,7 @@ void FluidGrid::linearSolveLoop(int startIndex, int endIndex, std::vector<float>
 			_mm256_storeu_ps(&tmp[x + y * size], _cell);
 		}
 
-		// Take care of rest of the cells if x-2 is not evenly divisible by 8
+		// Take care of rest of the cells if x-2 is not evenly divisible by SIMD_STRIDE
 		for (; x < size - 1; x++) {
 			float neighbors =
 				neighborDiffusion * (
@@ -384,7 +387,7 @@ void FluidGrid::linearSolveLoop(int startIndex, int endIndex, std::vector<float>
 	}
 }
 
-void FluidGrid::setBounds(Direction direction, std::vector<float> &arr) const {
+void FluidGrid::setBounds(Direction direction, std::vector<float> &arr) {
 	for (int i = 1; i < size-1; i++) {
 		// Left and right edge get the reverse velocity of the neighbor if in X direction
 		arr[0		 + i * size] = (direction == Direction::HORIZONTAL) ? -arr[1		  + i * size] : arr[1		 + i * size];
@@ -395,15 +398,17 @@ void FluidGrid::setBounds(Direction direction, std::vector<float> &arr) const {
 		arr[i + (size-1) * size] = (direction == Direction::VERTICAL) ? -arr[i + (size-2) * size] : arr[i + (size-2) * size];
 	}
 
+	constexpr float neighborScaling = 0.5F;
+
 	// The corners get the average values of their neighbors
-	arr[0		 + 0		* size] = 0.5F * (arr[1		  + 0		 * size] + arr[0		+ 1		   * size]);
-	arr[(size-1) + 0		* size] = 0.5F * (arr[(size-2) + 0		 * size] + arr[(size-1) + 1		   * size]);
-	arr[0		 + (size-1)	* size] = 0.5F * (arr[0		  + (size-2) * size] + arr[1		+ (size-1) * size]);
-	arr[(size-1) + (size-1) * size] = 0.5F * (arr[(size-2) + (size-1) * size] + arr[(size-1) + (size-2) * size]);
+	arr[0		 + 0		* size] = neighborScaling * (arr[1		  + 0		 * size] + arr[0		+ 1		   * size]);
+	arr[(size-1) + 0		* size] = neighborScaling * (arr[(size-2) + 0		 * size] + arr[(size-1) + 1		   * size]);
+	arr[0		 + (size-1)	* size] = neighborScaling * (arr[0		  + (size-2) * size] + arr[1		+ (size-1) * size]);
+	arr[(size-1) + (size-1) * size] = neighborScaling * (arr[(size-2) + (size-1) * size] + arr[(size-1) + (size-2) * size]);
 }
 
 void FluidGrid::fadeDensity(float dt, double fadeRate) {
-	double scaledFadeRate = 1 - dt * fadeRate * size;
+	const double scaledFadeRate = 1 - dt * fadeRate * size;
 	for (int y = 1; y < size - 1; y++) {
 		for (int x = 1; x < size - 1; x++) {
 			density[x + y * size] = static_cast<float>(scaledFadeRate * density[x + y * size]);
@@ -416,10 +421,10 @@ void FluidGrid::startTimer() {
 }
 
 void FluidGrid::endTimer(const std::string &timerName) {
-	auto t1 = std::chrono::steady_clock::now();
-	std::chrono::duration<double, std::micro> microSeconds = t1 - timerT0;
+	const auto t1 = std::chrono::steady_clock::now();
+	const std::chrono::duration<double, std::micro> microSeconds = t1 - timerT0;
 
-	auto iterator = timers.find(timerName);
+	const auto iterator = timers.find(timerName);
 	if (iterator != timers.end()) {
 		iterator->second += microSeconds.count();
 	} else {
@@ -429,10 +434,10 @@ void FluidGrid::endTimer(const std::string &timerName) {
 
 void FluidGrid::checkPrint() {
 	runs++;
-	auto printT1 = std::chrono::steady_clock::now();
-	std::chrono::duration<double, std::micro> printMicroSeconds = printT1 - printT0;
+	const auto printT1 = std::chrono::steady_clock::now();
+	const std::chrono::duration<double, std::micro> printMicroSeconds = printT1 - printT0;
 	microsSinceLastPrint += printMicroSeconds.count();
-	const double ONE_SECOND_IN_MICROSECONDS = 1000000.0;
+	constexpr double ONE_SECOND_IN_MICROSECONDS = 1000000.0;
 	if (microsSinceLastPrint > ONE_SECOND_IN_MICROSECONDS) {
 		for (std::pair<const std::string, double> &timer : timers) {
 			std::cout << timer.first << ": " << timer.second / runs << " microseconds\n";

@@ -1,76 +1,76 @@
 #include "ThreadPool.h"
 
-Worker::Worker(ThreadPool &threadPool) : threadPool(threadPool) {
-	thread = std::thread(&Worker::threadLoop, this);
+Worker::Worker(ThreadPool &threadPool) : m_threadPool(threadPool) {
+	m_thread = std::thread(&Worker::threadLoop, this);
 }
 
 Worker::~Worker() {
 	{
-		std::lock_guard<std::mutex> lock(sleepMux);
-		shouldExit = true;
+		std::lock_guard<std::mutex> lock(m_sleepMux);
+		m_shouldExit = true;
 	}
 
-	sleepCV.notify_all();
+	m_sleepCV.notify_all();
 
-	thread.join();
+	m_thread.join();
 }
 
 void Worker::threadLoop() {
 	while (true) {
-		std::unique_lock<std::mutex> lock(sleepMux);
-		sleepCV.wait(lock, [&] { return hasWork || shouldExit; });
+		std::unique_lock<std::mutex> lock(m_sleepMux);
+		m_sleepCV.wait(lock, [&] { return m_hasWork || m_shouldExit; });
 		lock.unlock();
-		if (shouldExit) { return; }
+		if (m_shouldExit) { return; }
 
-		work();
+		m_work();
 
-		hasWork = false;
-		threadPool.threadDone();
+		m_hasWork = false;
+		m_threadPool.threadDone();
 	}
 }
 
 void Worker::start(std::function<void()> work) {
 	{
-		std::lock_guard<std::mutex> lock(sleepMux);
-		this->work = std::move(work);
-		hasWork = true;
+		std::lock_guard<std::mutex> lock(m_sleepMux);
+		m_work = std::move(work);
+		m_hasWork = true;
 	}
 
-	sleepCV.notify_all();
+	m_sleepCV.notify_all();
 }
 
 void ThreadPool::init(int numWorkers) {
-	this->numWorkers = numWorkers;
+	m_numWorkers = numWorkers;
 
 	for (int i = 0; i < numWorkers; i++) {
-		workers.emplace_back(std::make_unique<Worker>(*this));
+		m_workers.emplace_back(std::make_unique<Worker>(*this));
 	}
 
 	std::cout << numWorkers << " threads started\n";
 }
 
 void ThreadPool::computeOnThreads(int size, const std::function<void(int, int)> &work) {
-	if (numWorkers == 1) {
-		workers[0]->start([=] { work(1, size-1); });
+	if (m_numWorkers == 1) {
+		m_workers[0]->start([=] { work(1, size-1); });
 	} else {
-		int sizePerThread = (size - 2) / (numWorkers - 1);
-		int remainingWork = (size - 2) % (numWorkers - 1);
-		for (int i = 0; i < numWorkers - 1; i++) {
-			workers[i]->start([=] { work(i * sizePerThread + 1, (i + 1) * sizePerThread + 1); });
+		const int sizePerThread = (size - 2) / (m_numWorkers - 1);
+		const int remainingWork = (size - 2) % (m_numWorkers - 1);
+		for (int i = 0; i < m_numWorkers - 1; i++) {
+			m_workers[i]->start([=] { work(i * sizePerThread + 1, (i + 1) * sizePerThread + 1); });
 		}
-		workers[numWorkers - 1]->start([=] { work((numWorkers - 1) * sizePerThread + 1, (numWorkers - 1) * sizePerThread + 1 + remainingWork); });
+		m_workers[m_numWorkers - 1]->start([=] { work((m_numWorkers - 1) * sizePerThread + 1, (m_numWorkers - 1) * sizePerThread + 1 + remainingWork); });
 	}
 
-	std::unique_lock<std::mutex> lock(doneMux);
-	doneCV.wait(lock, [&] { return numWorkersDone == numWorkers; });
-	numWorkersDone = 0;
+	std::unique_lock<std::mutex> lock(m_doneMux);
+	m_doneCV.wait(lock, [&] { return m_numWorkersDone == m_numWorkers; });
+	m_numWorkersDone = 0;
 }
 
 void ThreadPool::threadDone() {
 	{
-		std::lock_guard<std::mutex> doneLock(doneMux);
-		numWorkersDone++;
+		std::lock_guard<std::mutex> doneLock(m_doneMux);
+		m_numWorkersDone++;
 	}
 
-	doneCV.notify_all();
+	m_doneCV.notify_all();
 }

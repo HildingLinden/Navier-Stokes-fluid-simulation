@@ -1,21 +1,21 @@
 #pragma once
-#include <mutex>
 #include <condition_variable>
 #include <functional>
-#include <thread>
 #include <iostream>
+#include <mutex>
+#include <thread>
 #include <vector>
 
 class ThreadPool;
 
 class Worker {
-	bool shouldExit = false;
-	bool hasWork = false;
-	std::condition_variable sleepCV;
-	std::mutex sleepMux;
-	std::function<void()> work;
-	ThreadPool &threadPool;
-	std::thread thread;
+	bool m_shouldExit = false;
+	bool m_hasWork = false;
+	std::condition_variable m_sleepCV;
+	std::mutex m_sleepMux;
+	std::function<void()> m_work;
+	ThreadPool &m_threadPool;
+	std::thread m_thread;
 
 public:
 	explicit Worker(ThreadPool &threadPool);
@@ -29,11 +29,11 @@ public:
 };
 
 class ThreadPool {
-	std::vector<std::unique_ptr<Worker>> workers;
-	int numWorkers = 0;
-	std::condition_variable doneCV;
-	std::mutex doneMux;
-	int numWorkersDone = 0;
+	std::vector<std::unique_ptr<Worker>> m_workers;
+	int m_numWorkers = 0;
+	std::condition_variable m_doneCV;
+	std::mutex m_doneMux;
+	int m_numWorkersDone = 0;
 
 public:
 	void init(int numWorkers);
